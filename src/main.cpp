@@ -499,6 +499,7 @@ void cleanup() {
     g_vertexBuffer.reset();
 
     g_graphicsPipeline.reset();
+    g_pipelineLayout.reset();
     g_renderPass.reset();
     g_swapchain.reset();
     // Context destructor handles device/instance/debugMessenger cleanup
