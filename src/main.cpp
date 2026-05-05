@@ -20,6 +20,8 @@
 #include "core/RenderPass.h"
 #include "core/PipelineLayout.h"
 #include "core/GraphicsPipeline.h"
+#include "core/DescriptorSetLayout.h"
+#include "core/DescriptorPool.h"
 
 #include <iostream>
 #include <vector>
@@ -478,6 +480,31 @@ void initVulkan() {
     createCommandPool();
     createCommandBuffers();
     createSyncObjects();
+
+    // ============================================================================
+    // Verify DescriptorSetLayout + DescriptorPool (Nano-02.8)
+    // ============================================================================
+    {
+        VkDescriptorSetLayoutCreateInfo dslInfo{};
+        dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        kazu::DescriptorSetLayout testLayout(*g_ctx, dslInfo);
+
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSize.descriptorCount = 1;
+
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets = 1;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        kazu::DescriptorPool testPool(*g_ctx, poolInfo);
+
+        VkDescriptorSet testSet = testPool.allocate(testLayout.handle());
+        testPool.free(testSet);
+        spdlog::info("[Verify] DescriptorSetLayout + DescriptorPool: create/allocate/free/destroy OK");
+    }
 }
 
 void cleanup() {

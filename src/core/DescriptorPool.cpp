@@ -50,6 +50,8 @@ VkDescriptorSet DescriptorPool::allocate(VkDescriptorSetLayout layout) {
 }
 
 void DescriptorPool::free(VkDescriptorSet set) {
+    // Note: vkFreeDescriptorSets requires VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
+    // Otherwise, use vkResetDescriptorPool to free all sets at once.
     vkFreeDescriptorSets(m_ctx->device(), m_pool, 1, &set);
 }
 
