@@ -22,12 +22,16 @@ if(NOT glfw3_FOUND)
     FetchContent_MakeAvailable(glfw)
 endif()
 
+# spdlog (header-only, submodule)
+add_subdirectory(external/spdlog)
+
 # Executable
 add_executable(KazuEngine src/main.cpp)
 
 target_link_libraries(KazuEngine PRIVATE
     Vulkan::Vulkan
     glfw
+    spdlog::spdlog
 )
 
 # Shader compilation
