@@ -504,6 +504,7 @@ void cleanup() {
     vkDestroyPipeline(g_ctx->device(), graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(g_ctx->device(), pipelineLayout, nullptr);
 
+    g_renderPass.reset();
     g_swapchain.reset();
     // Context destructor handles device/instance/debugMessenger cleanup
     g_ctx.reset();
