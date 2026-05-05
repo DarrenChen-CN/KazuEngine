@@ -26,6 +26,7 @@
 #include "core/CommandPool.h"
 #include "core/CommandBuffer.h"
 #include "core/SyncObjects.h"
+#include "core/Sampler.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "core/stb_image.h"
@@ -94,7 +95,7 @@ const std::vector<Vertex> g_vertices = {
 
 std::unique_ptr<kazu::Buffer> g_vertexBuffer;
 std::unique_ptr<kazu::Image> g_textureImage;
-VkSampler g_textureSampler = VK_NULL_HANDLE;
+std::unique_ptr<kazu::Sampler> g_textureSampler;
 std::unique_ptr<kazu::DescriptorSetLayout> g_descriptorSetLayout;
 std::unique_ptr<kazu::DescriptorPool> g_descriptorPool;
 VkDescriptorSet g_descriptorSet = VK_NULL_HANDLE;
@@ -381,7 +382,7 @@ void createTextureImage() {
     samplerInfo.mipLodBias = 0.0f;
     samplerInfo.minLod = 0.0f;
     samplerInfo.maxLod = 0.0f;
-    VK_CHECK(vkCreateSampler(g_ctx->device(), &samplerInfo, nullptr, &g_textureSampler));
+    g_textureSampler = std::make_unique<kazu::Sampler>(*g_ctx, samplerInfo);
 }
 
 void createDescriptorSet() {
@@ -401,7 +402,7 @@ void createDescriptorSet() {
     VkDescriptorImageInfo imageInfo{};
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     imageInfo.imageView = g_textureImage->view();
-    imageInfo.sampler = g_textureSampler;
+    imageInfo.sampler = g_textureSampler->handle();
 
     VkWriteDescriptorSet descriptorWrite{};
     descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -554,10 +555,7 @@ void cleanup() {
     g_commandBuffers.clear();
     g_commandPool.reset();
 
-    if (g_textureSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(g_ctx->device(), g_textureSampler, nullptr);
-        g_textureSampler = VK_NULL_HANDLE;
-    }
+    g_textureSampler.reset();
     g_textureImage.reset();
     g_descriptorPool.reset();
     g_vertexBuffer.reset();
