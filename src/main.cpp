@@ -23,6 +23,8 @@
 #include "core/DescriptorSetLayout.h"
 #include "core/DescriptorPool.h"
 #include "core/Image.h"
+#include "core/CommandPool.h"
+#include "core/CommandBuffer.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "core/stb_image.h"
@@ -67,8 +69,8 @@ GLFWwindow* window = nullptr;
 std::unique_ptr<kazu::RenderPass> g_renderPass;
 std::unique_ptr<kazu::PipelineLayout> g_pipelineLayout;
 std::unique_ptr<kazu::GraphicsPipeline> g_graphicsPipeline;
-VkCommandPool commandPool = VK_NULL_HANDLE;
-std::vector<VkCommandBuffer> commandBuffers;
+std::unique_ptr<kazu::CommandPool> g_commandPool;
+std::vector<std::unique_ptr<kazu::CommandBuffer>> g_commandBuffers;
 std::vector<VkSemaphore> imageAvailableSemaphores;
 std::vector<VkSemaphore> renderFinishedSemaphores;
 std::vector<VkFence> inFlightFences;
@@ -310,27 +312,11 @@ void createGraphicsPipeline() {
 // ============================================================================
 
 
-void createCommandPool() {
-    VkCommandPoolCreateInfo poolInfo{};
-    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-    poolInfo.queueFamilyIndex = g_ctx->graphicsFamily();
-
-    if (vkCreateCommandPool(g_ctx->device(), &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-        kazu::fatalError("Failed to create command pool!");
-    }
-}
-
-void createCommandBuffers() {
-    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = commandPool;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
-
-    if (vkAllocateCommandBuffers(g_ctx->device(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
-        kazu::fatalError("Failed to allocate command buffers!");
+void createCommandPoolAndBuffers() {
+    g_commandPool = std::make_unique<kazu::CommandPool>(*g_ctx, g_ctx->graphicsFamily());
+    g_commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        g_commandBuffers[i] = std::make_unique<kazu::CommandBuffer>(*g_ctx, g_commandPool->handle());
     }
 }
 
@@ -355,20 +341,10 @@ void createTextureImage() {
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     // One-time command buffer for layout transition + copy
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandPool = commandPool;
-    allocInfo.commandBufferCount = 1;
-    VkCommandBuffer cmd;
-    vkAllocateCommandBuffers(g_ctx->device(), &allocInfo, &cmd);
+    kazu::CommandBuffer cmd(*g_ctx, g_commandPool->handle());
+    cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cmd, &beginInfo);
-
-    g_textureImage->transitionLayout(cmd, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    g_textureImage->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     VkBufferImageCopy region{};
     region.bufferOffset = 0;
@@ -380,20 +356,14 @@ void createTextureImage() {
     region.imageSubresource.layerCount = 1;
     region.imageOffset = {0, 0, 0};
     region.imageExtent = {static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1};
-    vkCmdCopyBufferToImage(cmd, stagingBuffer.handle(), g_textureImage->handle(),
+    vkCmdCopyBufferToImage(cmd.handle(), stagingBuffer.handle(), g_textureImage->handle(),
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    g_textureImage->transitionLayout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    g_textureImage->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
-    vkEndCommandBuffer(cmd);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
-    vkQueueSubmit(g_ctx->graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+    cmd.end();
+    cmd.submit(g_ctx->graphicsQueue());
     vkQueueWaitIdle(g_ctx->graphicsQueue());
-    vkFreeCommandBuffers(g_ctx->device(), commandPool, 1, &cmd);
 
     // Create sampler
     VkSamplerCreateInfo samplerInfo{};
@@ -448,12 +418,6 @@ void createDescriptorSet() {
 }
 
 void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    vkBeginCommandBuffer(cmd, &beginInfo);
-
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = g_renderPass->handle();
@@ -475,8 +439,6 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
                             0, 1, &g_descriptorSet, 0, nullptr);
     vkCmdDraw(cmd, static_cast<uint32_t>(g_vertices.size()), 1, 0, 0);
     vkCmdEndRenderPass(cmd);
-
-    vkEndCommandBuffer(cmd);
 }
 
 // ============================================================================
@@ -565,31 +527,22 @@ void drawFrame() {
     }
 
     vkResetFences(g_ctx->device(), 1, &inFlightFences[currentFrame]);
-    vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-    recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-
-    VkSemaphore waitSemaphores[] = { imageAvailableSemaphores[currentFrame] };
-    VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = waitSemaphores;
-    submitInfo.pWaitDstStageMask = waitStages;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
+    g_commandBuffers[currentFrame]->reset();
+    g_commandBuffers[currentFrame]->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    recordCommandBuffer(g_commandBuffers[currentFrame]->handle(), imageIndex);
+    g_commandBuffers[currentFrame]->end();
 
     VkSemaphore renderFinishedSemaphore = imageRenderFinishedSemaphores[imageIndex];
-    VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
-    submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = signalSemaphores;
-
-    VK_CHECK(vkQueueSubmit(g_ctx->graphicsQueue(), 1, &submitInfo, inFlightFences[currentFrame]));
+    g_commandBuffers[currentFrame]->submit(
+        g_ctx->graphicsQueue(),
+        imageAvailableSemaphores[currentFrame],
+        renderFinishedSemaphore,
+        inFlightFences[currentFrame]);
 
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = signalSemaphores;
+    presentInfo.pWaitSemaphores = &renderFinishedSemaphore;
     presentInfo.swapchainCount = 1;
     VkSwapchainKHR swapchainHandle = g_swapchain->handle();
     presentInfo.pSwapchains = &swapchainHandle;
@@ -626,8 +579,7 @@ void initVulkan() {
     g_swapchain->createFramebuffers(g_renderPass->handle());
     createGraphicsPipeline();
     createVertexBuffer();
-    createCommandPool();
-    createCommandBuffers();
+    createCommandPoolAndBuffers();
     createSyncObjects();
     createTextureImage();
     createDescriptorSet();
@@ -647,7 +599,8 @@ void cleanup() {
         vkDestroySemaphore(g_ctx->device(), sem, nullptr);
     }
 
-    vkDestroyCommandPool(g_ctx->device(), commandPool, nullptr);
+    g_commandBuffers.clear();
+    g_commandPool.reset();
 
     if (g_textureSampler != VK_NULL_HANDLE) {
         vkDestroySampler(g_ctx->device(), g_textureSampler, nullptr);
