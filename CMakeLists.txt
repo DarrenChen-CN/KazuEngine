@@ -26,7 +26,10 @@ endif()
 add_subdirectory(external/spdlog)
 
 # Executable
-add_executable(KazuEngine src/main.cpp)
+add_executable(KazuEngine
+    src/main.cpp
+    src/core/Context.cpp
+)
 
 target_link_libraries(KazuEngine PRIVATE
     Vulkan::Vulkan
