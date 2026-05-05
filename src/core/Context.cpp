@@ -20,13 +20,9 @@ Context::Context(const std::string& appName, bool enableValidation)
 {
     try {
         createInstance(appName, enableValidation);
-        spdlog::info("Vulkan instance created successfully.");
         setupDebugMessenger();
-        spdlog::info("Debug messenger set up successfully.");
         pickPhysicalDevice();
-        spdlog::info("Physical device picked successfully.");
         createLogicalDevice();
-        spdlog::info("Logical device created successfully.");
     } catch (...) {
         // Partial cleanup: destroy what was successfully created
         // Note: destructor won't run if constructor throws
@@ -292,15 +288,7 @@ void Context::createLogicalDevice() {
         createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
         createInfo.ppEnabledLayerNames = validationLayers.data();
     }
-    VkResult result = vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device);
-    if (result != VK_SUCCESS) {
-        spdlog::error("vkCreateDevice failed: {} (0x{:x})", vkResultToString(result), static_cast<int>(result));
-        spdlog::error("  physicalDevice: {}", (void*)m_physicalDevice);
-        spdlog::error("  queueFamilyCount: {}", queueCreateInfos.size());
-        spdlog::error("  graphicsFamily: {}, presentFamily: {}", m_graphicsFamily, m_presentFamily);
-        spdlog::error("  extensions: {}", deviceExtensions[0]);
-        throw std::runtime_error("vkCreateDevice failed");
-    }
+    VK_CHECK(vkCreateDevice(m_physicalDevice, &createInfo, nullptr, &m_device));
 
     vkGetDeviceQueue(m_device, m_graphicsFamily, 0, &m_graphicsQueue);
     vkGetDeviceQueue(m_device, m_presentFamily, 0, &m_presentQueue);
