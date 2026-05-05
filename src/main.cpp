@@ -12,6 +12,7 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
+#include "core/Utils.h"
 
 #include <iostream>
 #include <vector>
@@ -75,7 +76,7 @@ uint32_t currentFrame = 0;
 // ============================================================================
 
 [[noreturn]] void fatalError(const std::string& msg) {
-    std::cerr << "[FATAL] " << msg << std::endl;
+    spdlog::error("[FATAL] {}", msg);
     throw std::runtime_error(msg);
 }
 
@@ -120,8 +121,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     void* pUserData) {
     
     // Only print warnings and errors to reduce noise
-    if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        std::cerr << "[Validation] " << pCallbackData->pMessage << std::endl;
+    if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        spdlog::error("[Validation] {}", pCallbackData->pMessage);
+    } else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        spdlog::warn("[Validation] {}", pCallbackData->pMessage);
     }
     return VK_FALSE;
 }
@@ -281,7 +284,7 @@ void pickPhysicalDevice() {
 
     VkPhysicalDeviceProperties props;
     vkGetPhysicalDeviceProperties(physicalDevice, &props);
-    std::cout << "Selected GPU: " << props.deviceName << std::endl;
+    spdlog::info("Selected GPU: {}", props.deviceName);
 }
 
 // ============================================================================
@@ -764,7 +767,7 @@ void drawFrame() {
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         // Dirty code: just exit on resize. Proper handling in Week 2.
-        std::cerr << "Swapchain out of date. Please restart." << std::endl;
+        spdlog::warn("Swapchain out of date. Please restart.");
         glfwSetWindowShouldClose(window, true);
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -804,7 +807,7 @@ void drawFrame() {
 
     result = vkQueuePresentKHR(presentQueue, &presentInfo);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
-        std::cerr << "Swapchain out of date during present. Please restart." << std::endl;
+        spdlog::warn("Swapchain out of date during present. Please restart.");
         glfwSetWindowShouldClose(window, true);
         return;
     } else if (result != VK_SUCCESS) {
@@ -876,6 +879,8 @@ void cleanup() {
 // ============================================================================
 
 int main() {
+    kazu::initLogger();
+
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE); // Disable resize for dirty MVP
@@ -887,14 +892,14 @@ int main() {
 
     try {
         initVulkan();
-        std::cout << "Vulkan initialized successfully. Close window to exit." << std::endl;
+        spdlog::info("Vulkan initialized successfully. Close window to exit.");
 
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
             drawFrame();
         }
     } catch (const std::exception& e) {
-        std::cerr << "Exception: " << e.what() << std::endl;
+        spdlog::error("Exception: {}", e.what());
         cleanup();
         glfwDestroyWindow(window);
         glfwTerminate();
