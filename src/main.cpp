@@ -25,6 +25,7 @@
 #include "core/Image.h"
 #include "core/CommandPool.h"
 #include "core/CommandBuffer.h"
+#include "core/SyncObjects.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "core/stb_image.h"
@@ -71,10 +72,7 @@ std::unique_ptr<kazu::PipelineLayout> g_pipelineLayout;
 std::unique_ptr<kazu::GraphicsPipeline> g_graphicsPipeline;
 std::unique_ptr<kazu::CommandPool> g_commandPool;
 std::vector<std::unique_ptr<kazu::CommandBuffer>> g_commandBuffers;
-std::vector<VkSemaphore> imageAvailableSemaphores;
-std::vector<VkSemaphore> renderFinishedSemaphores;
-std::vector<VkFence> inFlightFences;
-std::vector<VkSemaphore> imageRenderFinishedSemaphores; // per swapchain image
+std::unique_ptr<kazu::SyncObjects> g_syncObjects;
 uint32_t currentFrame = 0;
 bool g_framebufferResized = false;
 
@@ -446,32 +444,7 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 // ============================================================================
 
 void createSyncObjects() {
-    imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
-
-    VkSemaphoreCreateInfo semaphoreInfo{};
-    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-    VkFenceCreateInfo fenceInfo{};
-    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        if (vkCreateSemaphore(g_ctx->device(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
-            vkCreateSemaphore(g_ctx->device(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
-            vkCreateFence(g_ctx->device(), &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
-            kazu::fatalError("Failed to create sync objects!");
-        }
-    }
-
-    // Create per-swapchain-image render finished semaphores to avoid reuse conflict
-    imageRenderFinishedSemaphores.resize(g_swapchain->imageCount());
-    for (size_t i = 0; i < g_swapchain->imageCount(); ++i) {
-        if (vkCreateSemaphore(g_ctx->device(), &semaphoreInfo, nullptr, &imageRenderFinishedSemaphores[i]) != VK_SUCCESS) {
-            kazu::fatalError("Failed to create image render finished semaphore!");
-        }
-    }
+    g_syncObjects = std::make_unique<kazu::SyncObjects>(*g_ctx, MAX_FRAMES_IN_FLIGHT, g_swapchain->imageCount());
 }
 
 // ============================================================================
@@ -489,28 +462,14 @@ void recreateSwapchain() {
     g_swapchain->recreate(g_renderPass->handle());
 
     // Recreate per-swapchain-image semaphores if image count changed
-    uint32_t newImageCount = g_swapchain->imageCount();
-    if (newImageCount != imageRenderFinishedSemaphores.size()) {
-        for (auto sem : imageRenderFinishedSemaphores) {
-            vkDestroySemaphore(g_ctx->device(), sem, nullptr);
-        }
-        imageRenderFinishedSemaphores.clear();
-        imageRenderFinishedSemaphores.resize(newImageCount);
-        VkSemaphoreCreateInfo semaphoreInfo{};
-        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        for (size_t i = 0; i < newImageCount; ++i) {
-            VK_CHECK(vkCreateSemaphore(g_ctx->device(), &semaphoreInfo, nullptr, &imageRenderFinishedSemaphores[i]));
-        }
-        spdlog::info("Image render finished semaphores recreated: {} -> {}",
-                     imageRenderFinishedSemaphores.size(), newImageCount);
-    }
+    g_syncObjects->recreateImageRenderFinished(g_swapchain->imageCount());
 }
 
 void drawFrame() {
-    vkWaitForFences(g_ctx->device(), 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
+    g_syncObjects->waitFence(currentFrame);
 
     uint32_t imageIndex = 0;
-    VkResult result = g_swapchain->acquireNextImage(imageAvailableSemaphores[currentFrame], imageIndex);
+    VkResult result = g_swapchain->acquireNextImage(g_syncObjects->imageAvailable(currentFrame), imageIndex);
 
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         recreateSwapchain();
@@ -526,18 +485,18 @@ void drawFrame() {
         return;
     }
 
-    vkResetFences(g_ctx->device(), 1, &inFlightFences[currentFrame]);
+    g_syncObjects->resetFence(currentFrame);
     g_commandBuffers[currentFrame]->reset();
     g_commandBuffers[currentFrame]->begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     recordCommandBuffer(g_commandBuffers[currentFrame]->handle(), imageIndex);
     g_commandBuffers[currentFrame]->end();
 
-    VkSemaphore renderFinishedSemaphore = imageRenderFinishedSemaphores[imageIndex];
+    VkSemaphore renderFinishedSemaphore = g_syncObjects->imageRenderFinished(imageIndex);
     g_commandBuffers[currentFrame]->submit(
         g_ctx->graphicsQueue(),
-        imageAvailableSemaphores[currentFrame],
+        g_syncObjects->imageAvailable(currentFrame),
         renderFinishedSemaphore,
-        inFlightFences[currentFrame]);
+        g_syncObjects->inFlight(currentFrame));
 
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -590,14 +549,7 @@ void cleanup() {
 
     vkDeviceWaitIdle(g_ctx->device());
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-        vkDestroyFence(g_ctx->device(), inFlightFences[i], nullptr);
-        vkDestroySemaphore(g_ctx->device(), renderFinishedSemaphores[i], nullptr);
-        vkDestroySemaphore(g_ctx->device(), imageAvailableSemaphores[i], nullptr);
-    }
-    for (auto sem : imageRenderFinishedSemaphores) {
-        vkDestroySemaphore(g_ctx->device(), sem, nullptr);
-    }
+    g_syncObjects.reset();
 
     g_commandBuffers.clear();
     g_commandPool.reset();
