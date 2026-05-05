@@ -15,7 +15,6 @@ Image::Image(Context& ctx, uint32_t width, uint32_t height, VkFormat format,
     m_extent.width = width;
     m_extent.height = height;
 
-    // Create VkImage
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -31,21 +30,11 @@ Image::Image(Context& ctx, uint32_t width, uint32_t height, VkFormat format,
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    VK_CHECK(vkCreateImage(m_ctx->device(), &imageInfo, nullptr, &m_image));
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.requiredFlags = properties;
 
-    // Allocate memory
-    VkMemoryRequirements memRequirements;
-    vkGetImageMemoryRequirements(m_ctx->device(), m_image, &memRequirements);
+    VK_CHECK(vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_image, &m_allocation, nullptr));
 
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
-
-    VK_CHECK(vkAllocateMemory(m_ctx->device(), &allocInfo, nullptr, &m_memory));
-    VK_CHECK(vkBindImageMemory(m_ctx->device(), m_image, m_memory, 0));
-
-    // Create VkImageView
     VkImageViewCreateInfo viewInfo{};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = m_image;
@@ -65,13 +54,10 @@ Image::~Image() {
         vkDestroyImageView(m_ctx->device(), m_view, nullptr);
         m_view = VK_NULL_HANDLE;
     }
-    if (m_memory != VK_NULL_HANDLE && m_ctx) {
-        vkFreeMemory(m_ctx->device(), m_memory, nullptr);
-        m_memory = VK_NULL_HANDLE;
-    }
     if (m_image != VK_NULL_HANDLE && m_ctx) {
-        vkDestroyImage(m_ctx->device(), m_image, nullptr);
+        vmaDestroyImage(m_ctx->allocator(), m_image, m_allocation);
         m_image = VK_NULL_HANDLE;
+        m_allocation = VK_NULL_HANDLE;
     }
 }
 
@@ -79,13 +65,13 @@ Image::Image(Image&& other) noexcept
     : m_ctx(other.m_ctx)
     , m_image(other.m_image)
     , m_view(other.m_view)
-    , m_memory(other.m_memory)
+    , m_allocation(other.m_allocation)
     , m_format(other.m_format)
     , m_extent(other.m_extent)
 {
     other.m_image = VK_NULL_HANDLE;
     other.m_view = VK_NULL_HANDLE;
-    other.m_memory = VK_NULL_HANDLE;
+    other.m_allocation = VK_NULL_HANDLE;
 }
 
 Image& Image::operator=(Image&& other) noexcept {
@@ -94,12 +80,12 @@ Image& Image::operator=(Image&& other) noexcept {
         m_ctx = other.m_ctx;
         m_image = other.m_image;
         m_view = other.m_view;
-        m_memory = other.m_memory;
+        m_allocation = other.m_allocation;
         m_format = other.m_format;
         m_extent = other.m_extent;
         other.m_image = VK_NULL_HANDLE;
         other.m_view = VK_NULL_HANDLE;
-        other.m_memory = VK_NULL_HANDLE;
+        other.m_allocation = VK_NULL_HANDLE;
     }
     return *this;
 }
@@ -142,18 +128,6 @@ void Image::transitionLayout(VkCommandBuffer cmd, VkImageLayout oldLayout, VkIma
     }
 
     vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-}
-
-uint32_t Image::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(m_ctx->physicalDevice(), &memProperties);
-
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
-        if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
-        }
-    }
-    fatalError("Failed to find suitable memory type!");
 }
 
 } // namespace kazu

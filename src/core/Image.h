@@ -23,9 +23,11 @@ public:
 
     VkImage handle() const { return m_image; }
     VkImageView view() const { return m_view; }
-    VkDeviceMemory memory() const { return m_memory; }
     VkFormat format() const { return m_format; }
     VkExtent2D extent() const { return m_extent; }
+
+    // Note: With VMA, the underlying VkDeviceMemory is managed by the allocator.
+    VkDeviceMemory memory() const { return VK_NULL_HANDLE; }
 
     void transitionLayout(VkCommandBuffer cmd, VkImageLayout oldLayout, VkImageLayout newLayout);
 
@@ -33,11 +35,9 @@ private:
     Context* m_ctx = nullptr;
     VkImage m_image = VK_NULL_HANDLE;
     VkImageView m_view = VK_NULL_HANDLE;
-    VkDeviceMemory m_memory = VK_NULL_HANDLE;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
     VkFormat m_format;
     VkExtent2D m_extent;
-
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 };
 
 } // namespace kazu
