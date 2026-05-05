@@ -18,6 +18,8 @@
 #include "core/Buffer.h"
 #include "core/ShaderModule.h"
 #include "core/RenderPass.h"
+#include "core/PipelineLayout.h"
+#include "core/GraphicsPipeline.h"
 
 #include <iostream>
 #include <vector>
@@ -57,8 +59,8 @@ std::unique_ptr<kazu::Context> g_ctx;
 std::unique_ptr<kazu::Swapchain> g_swapchain;
 GLFWwindow* window = nullptr;
 std::unique_ptr<kazu::RenderPass> g_renderPass;
-VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-VkPipeline graphicsPipeline = VK_NULL_HANDLE;
+std::unique_ptr<kazu::PipelineLayout> g_pipelineLayout;
+std::unique_ptr<kazu::GraphicsPipeline> g_graphicsPipeline;
 VkCommandPool commandPool = VK_NULL_HANDLE;
 std::vector<VkCommandBuffer> commandBuffers;
 std::vector<VkSemaphore> imageAvailableSemaphores;
@@ -246,10 +248,7 @@ void createGraphicsPipeline() {
 
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-
-    if (vkCreatePipelineLayout(g_ctx->device(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        kazu::fatalError("Failed to create pipeline layout!");
-    }
+    g_pipelineLayout = std::make_unique<kazu::PipelineLayout>(*g_ctx, pipelineLayoutInfo);
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -261,15 +260,13 @@ void createGraphicsPipeline() {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.layout = pipelineLayout;
+    pipelineInfo.layout = g_pipelineLayout->handle();
     pipelineInfo.renderPass = g_renderPass->handle();
     pipelineInfo.subpass = 0;
 
-    if (vkCreateGraphicsPipelines(g_ctx->device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
-        kazu::fatalError("Failed to create graphics pipeline!");
-    }
+    g_graphicsPipeline = std::make_unique<kazu::GraphicsPipeline>(*g_ctx, pipelineInfo);
 
-    // ShaderModules destroyed automatically by RAII when function returns
+    // ShaderModules / PipelineLayout destroyed automatically by RAII when function returns
 }
 
 // ============================================================================
@@ -320,7 +317,7 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     renderPassInfo.pClearValues = &clearColor;
 
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_graphicsPipeline->handle());
 
     VkBuffer vertexBuffers[] = { g_vertexBuffer->handle() };
     VkDeviceSize offsets[] = { 0 };
@@ -501,9 +498,7 @@ void cleanup() {
 
     g_vertexBuffer.reset();
 
-    vkDestroyPipeline(g_ctx->device(), graphicsPipeline, nullptr);
-    vkDestroyPipelineLayout(g_ctx->device(), pipelineLayout, nullptr);
-
+    g_graphicsPipeline.reset();
     g_renderPass.reset();
     g_swapchain.reset();
     // Context destructor handles device/instance/debugMessenger cleanup
