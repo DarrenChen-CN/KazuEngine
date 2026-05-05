@@ -25,6 +25,14 @@ endif()
 # spdlog (header-only, submodule)
 add_subdirectory(external/spdlog)
 
+# VMA (Vulkan Memory Allocator)
+FetchContent_Declare(
+    vma
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDks/VulkanMemoryAllocator.git
+    GIT_TAG        v3.1.0
+)
+FetchContent_MakeAvailable(vma)
+
 # Executable
 file(GLOB_RECURSE SOURCES src/*.cpp)
 add_executable(KazuEngine ${SOURCES})
@@ -33,6 +41,10 @@ target_link_libraries(KazuEngine PRIVATE
     Vulkan::Vulkan
     glfw
     spdlog::spdlog
+)
+
+target_include_directories(KazuEngine PRIVATE
+    ${vma_SOURCE_DIR}/include
 )
 
 # Shader compilation

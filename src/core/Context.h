@@ -13,6 +13,7 @@
 #pragma once
 
 #include <vulkan/vulkan.h>
+#include <vk_mem_alloc.h>
 #include <string>
 #include <vector>
 #include <optional>
@@ -41,6 +42,7 @@ public:
     uint32_t graphicsFamily() const { return m_graphicsFamily; }
     uint32_t presentFamily() const { return m_presentFamily; }
     bool validationEnabled() const { return m_validationEnabled; }
+    VmaAllocator allocator() const { return m_allocator; }
 
 private:
     VkInstance m_instance = VK_NULL_HANDLE;
@@ -52,6 +54,7 @@ private:
     uint32_t m_graphicsFamily = 0;
     uint32_t m_presentFamily = 0;
     bool m_validationEnabled = false;
+    VmaAllocator m_allocator = VK_NULL_HANDLE;
 
     struct QueueFamilyIndices {
         std::optional<uint32_t> graphicsFamily;

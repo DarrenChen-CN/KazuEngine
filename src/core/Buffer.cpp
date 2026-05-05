@@ -20,21 +20,13 @@ Buffer::Buffer(Context& ctx, VkDeviceSize size, VkBufferUsageFlags usage,
     bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    VK_CHECK(vkCreateBuffer(m_ctx->device(), &bufferInfo, nullptr, &m_buffer));
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.requiredFlags = properties;
 
-    VkMemoryRequirements memRequirements;
-    vkGetBufferMemoryRequirements(m_ctx->device(), m_buffer, &memRequirements);
-
-    VkMemoryAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocInfo.allocationSize = memRequirements.size;
-    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
-
-    VK_CHECK(vkAllocateMemory(m_ctx->device(), &allocInfo, nullptr, &m_memory));
-    VK_CHECK(vkBindBufferMemory(m_ctx->device(), m_buffer, m_memory, 0));
+    VK_CHECK(vmaCreateBuffer(m_ctx->allocator(), &bufferInfo, &allocInfo, &m_buffer, &m_allocation, nullptr));
 
     if (properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) {
-        VK_CHECK(vkMapMemory(m_ctx->device(), m_memory, 0, size, 0, &m_mapped));
+        VK_CHECK(vmaMapMemory(m_ctx->allocator(), m_allocation, &m_mapped));
     }
 }
 
@@ -42,31 +34,27 @@ Buffer::~Buffer() {
     if (!m_ctx) return;
 
     if (m_mapped) {
-        vkUnmapMemory(m_ctx->device(), m_memory);
+        vmaUnmapMemory(m_ctx->allocator(), m_allocation);
         m_mapped = nullptr;
     }
 
-    if (m_memory != VK_NULL_HANDLE) {
-        vkFreeMemory(m_ctx->device(), m_memory, nullptr);
-        m_memory = VK_NULL_HANDLE;
-    }
-
     if (m_buffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(m_ctx->device(), m_buffer, nullptr);
+        vmaDestroyBuffer(m_ctx->allocator(), m_buffer, m_allocation);
         m_buffer = VK_NULL_HANDLE;
+        m_allocation = VK_NULL_HANDLE;
     }
 }
 
 Buffer::Buffer(Buffer&& other) noexcept
     : m_ctx(other.m_ctx)
     , m_buffer(other.m_buffer)
-    , m_memory(other.m_memory)
+    , m_allocation(other.m_allocation)
     , m_size(other.m_size)
     , m_mapped(other.m_mapped)
     , m_properties(other.m_properties)
 {
     other.m_buffer = VK_NULL_HANDLE;
-    other.m_memory = VK_NULL_HANDLE;
+    other.m_allocation = VK_NULL_HANDLE;
     other.m_mapped = nullptr;
 }
 
@@ -76,13 +64,13 @@ Buffer& Buffer::operator=(Buffer&& other) noexcept {
 
         m_ctx = other.m_ctx;
         m_buffer = other.m_buffer;
-        m_memory = other.m_memory;
+        m_allocation = other.m_allocation;
         m_size = other.m_size;
         m_mapped = other.m_mapped;
         m_properties = other.m_properties;
 
         other.m_buffer = VK_NULL_HANDLE;
-        other.m_memory = VK_NULL_HANDLE;
+        other.m_allocation = VK_NULL_HANDLE;
         other.m_mapped = nullptr;
     }
     return *this;
@@ -98,28 +86,7 @@ void Buffer::upload(const void* data, VkDeviceSize size, VkDeviceSize offset) {
 
 void Buffer::flush() {
     if (!m_mapped) return;
-
-    VkMappedMemoryRange mappedRange{};
-    mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-    mappedRange.memory = m_memory;
-    mappedRange.offset = 0;
-    mappedRange.size = m_size;
-
-    VK_CHECK(vkFlushMappedMemoryRanges(m_ctx->device(), 1, &mappedRange));
-}
-
-uint32_t Buffer::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
-    VkPhysicalDeviceMemoryProperties memProperties;
-    vkGetPhysicalDeviceMemoryProperties(m_ctx->physicalDevice(), &memProperties);
-
-    for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
-        if ((typeFilter & (1 << i)) &&
-            (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
-            return i;
-        }
-    }
-
-    fatalError("Failed to find suitable memory type!");
+    vmaFlushAllocation(m_ctx->allocator(), m_allocation, 0, VK_WHOLE_SIZE);
 }
 
 } // namespace kazu

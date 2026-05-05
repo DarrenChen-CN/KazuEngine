@@ -23,6 +23,13 @@ Context::Context(const std::string& appName, bool enableValidation)
         setupDebugMessenger();
         pickPhysicalDevice();
         createLogicalDevice();
+
+        VmaAllocatorCreateInfo allocatorInfo{};
+        allocatorInfo.physicalDevice = m_physicalDevice;
+        allocatorInfo.device = m_device;
+        allocatorInfo.instance = m_instance;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
+        VK_CHECK(vmaCreateAllocator(&allocatorInfo, &m_allocator));
     } catch (...) {
         // Partial cleanup: destroy what was successfully created
         // Note: destructor won't run if constructor throws
@@ -41,6 +48,9 @@ Context::Context(const std::string& appName, bool enableValidation)
 }
 
 Context::~Context() {
+    if (m_allocator != VK_NULL_HANDLE) {
+        vmaDestroyAllocator(m_allocator);
+    }
     if (m_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(m_device);
         vkDestroyDevice(m_device, nullptr);
@@ -68,8 +78,10 @@ Context::Context(Context&& other) noexcept
     , m_graphicsFamily(other.m_graphicsFamily)
     , m_presentFamily(other.m_presentFamily)
     , m_validationEnabled(other.m_validationEnabled)
+    , m_allocator(other.m_allocator)
 {
     other.m_instance = VK_NULL_HANDLE;
+    other.m_allocator = VK_NULL_HANDLE;
     other.m_debugMessenger = VK_NULL_HANDLE;
     other.m_physicalDevice = VK_NULL_HANDLE;
     other.m_device = VK_NULL_HANDLE;

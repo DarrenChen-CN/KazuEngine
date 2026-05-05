@@ -24,9 +24,12 @@ public:
     Buffer& operator=(Buffer&& other) noexcept;
 
     VkBuffer handle() const { return m_buffer; }
-    VkDeviceMemory memory() const { return m_memory; }
     VkDeviceSize size() const { return m_size; }
     void* mapped() const { return m_mapped; }
+
+    // Note: With VMA, the underlying VkDeviceMemory is managed by the allocator.
+    // This method is kept for API compatibility but returns VK_NULL_HANDLE.
+    VkDeviceMemory memory() const { return VK_NULL_HANDLE; }
 
     // Upload data to CPU-visible buffer. For GPU-only buffers, use staging (TODO).
     void upload(const void* data, VkDeviceSize size, VkDeviceSize offset = 0);
@@ -35,12 +38,10 @@ public:
 private:
     Context* m_ctx = nullptr;
     VkBuffer m_buffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_memory = VK_NULL_HANDLE;
+    VmaAllocation m_allocation = VK_NULL_HANDLE;
     VkDeviceSize m_size = 0;
     void* m_mapped = nullptr;
     VkMemoryPropertyFlags m_properties = 0;
-
-    uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 };
 
 } // namespace kazu
