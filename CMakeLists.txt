@@ -31,6 +31,7 @@ add_executable(KazuEngine
     src/core/Context.cpp
     src/core/Swapchain.cpp
     src/core/Buffer.cpp
+    src/core/ShaderModule.cpp
 )
 
 target_link_libraries(KazuEngine PRIVATE

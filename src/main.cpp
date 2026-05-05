@@ -16,6 +16,7 @@
 #include "core/Context.h"
 #include "core/Swapchain.h"
 #include "core/Buffer.h"
+#include "core/ShaderModule.h"
 
 #include <iostream>
 #include <vector>
@@ -149,36 +150,23 @@ void createRenderPass() {
     }
 }
 
-VkShaderModule createShaderModule(const std::vector<char>& code) {
-    VkShaderModuleCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    createInfo.codeSize = code.size();
-    createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
-
-    VkShaderModule shaderModule;
-    if (vkCreateShaderModule(g_ctx->device(), &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        kazu::fatalError("Failed to create shader module!");
-    }
-    return shaderModule;
-}
-
 void createGraphicsPipeline() {
     auto vertCode = readFile("shaders/triangle.vert.spv");
     auto fragCode = readFile("shaders/triangle.frag.spv");
 
-    VkShaderModule vertModule = createShaderModule(vertCode);
-    VkShaderModule fragModule = createShaderModule(fragCode);
+    kazu::ShaderModule vertModule(*g_ctx, vertCode);
+    kazu::ShaderModule fragModule(*g_ctx, fragCode);
 
     VkPipelineShaderStageCreateInfo vertStageInfo{};
     vertStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     vertStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertStageInfo.module = vertModule;
+    vertStageInfo.module = vertModule.handle();
     vertStageInfo.pName = "main";
 
     VkPipelineShaderStageCreateInfo fragStageInfo{};
     fragStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     fragStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragStageInfo.module = fragModule;
+    fragStageInfo.module = fragModule.handle();
     fragStageInfo.pName = "main";
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertStageInfo, fragStageInfo };
@@ -282,8 +270,7 @@ void createGraphicsPipeline() {
         kazu::fatalError("Failed to create graphics pipeline!");
     }
 
-    vkDestroyShaderModule(g_ctx->device(), fragModule, nullptr);
-    vkDestroyShaderModule(g_ctx->device(), vertModule, nullptr);
+    // ShaderModules destroyed automatically by RAII when function returns
 }
 
 // ============================================================================
