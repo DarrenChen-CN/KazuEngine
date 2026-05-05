@@ -29,6 +29,7 @@ add_subdirectory(external/spdlog)
 add_executable(KazuEngine
     src/main.cpp
     src/core/Context.cpp
+    src/core/Swapchain.cpp
 )
 
 target_link_libraries(KazuEngine PRIVATE
