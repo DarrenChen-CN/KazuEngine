@@ -17,6 +17,7 @@
 #include "core/Swapchain.h"
 #include "core/Buffer.h"
 #include "core/ShaderModule.h"
+#include "core/RenderPass.h"
 
 #include <iostream>
 #include <vector>
@@ -55,7 +56,7 @@ const std::vector<const char*> deviceExtensions = {
 std::unique_ptr<kazu::Context> g_ctx;
 std::unique_ptr<kazu::Swapchain> g_swapchain;
 GLFWwindow* window = nullptr;
-VkRenderPass renderPass = VK_NULL_HANDLE;
+std::unique_ptr<kazu::RenderPass> g_renderPass;
 VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 VkPipeline graphicsPipeline = VK_NULL_HANDLE;
 VkCommandPool commandPool = VK_NULL_HANDLE;
@@ -145,9 +146,7 @@ void createRenderPass() {
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
 
-    if (vkCreateRenderPass(g_ctx->device(), &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-        kazu::fatalError("Failed to create render pass!");
-    }
+    g_renderPass = std::make_unique<kazu::RenderPass>(*g_ctx, renderPassInfo);
 }
 
 void createGraphicsPipeline() {
@@ -263,7 +262,7 @@ void createGraphicsPipeline() {
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = pipelineLayout;
-    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.renderPass = g_renderPass->handle();
     pipelineInfo.subpass = 0;
 
     if (vkCreateGraphicsPipelines(g_ctx->device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
@@ -311,7 +310,7 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    renderPassInfo.renderPass = renderPass;
+    renderPassInfo.renderPass = g_renderPass->handle();
     renderPassInfo.framebuffer = g_swapchain->framebuffer(imageIndex);
     renderPassInfo.renderArea.offset = { 0, 0 };
     renderPassInfo.renderArea.extent = g_swapchain->extent();
@@ -377,7 +376,7 @@ void recreateSwapchain() {
         glfwWaitEvents();
     }
 
-    g_swapchain->recreate(renderPass);
+    g_swapchain->recreate(g_renderPass->handle());
 
     // Recreate per-swapchain-image semaphores if image count changed
     uint32_t newImageCount = g_swapchain->imageCount();
@@ -476,7 +475,7 @@ void initVulkan() {
     g_ctx = std::make_unique<kazu::Context>("KazuEngine", true);
     g_swapchain = std::make_unique<kazu::Swapchain>(*g_ctx, window, VK_NULL_HANDLE);
     createRenderPass();
-    g_swapchain->createFramebuffers(renderPass);
+    g_swapchain->createFramebuffers(g_renderPass->handle());
     createGraphicsPipeline();
     createVertexBuffer();
     createCommandPool();
@@ -504,7 +503,6 @@ void cleanup() {
 
     vkDestroyPipeline(g_ctx->device(), graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(g_ctx->device(), pipelineLayout, nullptr);
-    vkDestroyRenderPass(g_ctx->device(), renderPass, nullptr);
 
     g_swapchain.reset();
     // Context destructor handles device/instance/debugMessenger cleanup
