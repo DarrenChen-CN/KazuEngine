@@ -22,6 +22,10 @@
 #include "core/GraphicsPipeline.h"
 #include "core/DescriptorSetLayout.h"
 #include "core/DescriptorPool.h"
+#include "core/Image.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "core/stb_image.h"
 
 #include <iostream>
 #include <vector>
@@ -76,15 +80,24 @@ bool g_framebufferResized = false;
 struct Vertex {
     float pos[2];
     float color[3];
+    float texCoord[2];
 };
 
 const std::vector<Vertex> g_vertices = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    {{-1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+    {{ 1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+    {{ 1.0f,  1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}},
+    {{-1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
+    {{ 1.0f,  1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}},
+    {{-1.0f,  1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f}}
 };
 
 std::unique_ptr<kazu::Buffer> g_vertexBuffer;
+std::unique_ptr<kazu::Image> g_textureImage;
+VkSampler g_textureSampler = VK_NULL_HANDLE;
+std::unique_ptr<kazu::DescriptorSetLayout> g_descriptorSetLayout;
+std::unique_ptr<kazu::DescriptorPool> g_descriptorPool;
+VkDescriptorSet g_descriptorSet = VK_NULL_HANDLE;
 
 // ============================================================================
 // Section 2: Utility Functions
@@ -180,7 +193,7 @@ void createGraphicsPipeline() {
     bindingDescription.stride = sizeof(Vertex);
     bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
     attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
@@ -190,6 +203,11 @@ void createGraphicsPipeline() {
     attributeDescriptions[1].location = 1;
     attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
     attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+    attributeDescriptions[2].binding = 0;
+    attributeDescriptions[2].location = 2;
+    attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -248,8 +266,24 @@ void createGraphicsPipeline() {
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+    samplerLayoutBinding.binding = 0;
+    samplerLayoutBinding.descriptorCount = 1;
+    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerLayoutBinding.pImmutableSamplers = nullptr;
+    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo descriptorSetLayoutInfo{};
+    descriptorSetLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    descriptorSetLayoutInfo.bindingCount = 1;
+    descriptorSetLayoutInfo.pBindings = &samplerLayoutBinding;
+    g_descriptorSetLayout = std::make_unique<kazu::DescriptorSetLayout>(*g_ctx, descriptorSetLayoutInfo);
+
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    VkDescriptorSetLayout dslHandle = g_descriptorSetLayout->handle();
+    pipelineLayoutInfo.pSetLayouts = &dslHandle;
     g_pipelineLayout = std::make_unique<kazu::PipelineLayout>(*g_ctx, pipelineLayoutInfo);
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -300,6 +334,119 @@ void createCommandBuffers() {
     }
 }
 
+void createTextureImage() {
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load("container.png", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) {
+        kazu::fatalError("Failed to load texture image!");
+    }
+    VkDeviceSize imageSize = static_cast<VkDeviceSize>(texWidth) * texHeight * 4;
+
+    kazu::Buffer stagingBuffer(*g_ctx, imageSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    stagingBuffer.upload(pixels, imageSize);
+    stbi_image_free(pixels);
+
+    g_textureImage = std::make_unique<kazu::Image>(*g_ctx,
+        static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight),
+        VK_FORMAT_R8G8B8A8_SRGB,
+        VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // One-time command buffer for layout transition + copy
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = commandPool;
+    allocInfo.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(g_ctx->device(), &allocInfo, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    g_textureImage->transitionLayout(cmd, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    VkBufferImageCopy region{};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = {static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight), 1};
+    vkCmdCopyBufferToImage(cmd, stagingBuffer.handle(), g_textureImage->handle(),
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    g_textureImage->transitionLayout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    vkQueueSubmit(g_ctx->graphicsQueue(), 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_ctx->graphicsQueue());
+    vkFreeCommandBuffers(g_ctx->device(), commandPool, 1, &cmd);
+
+    // Create sampler
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.mipLodBias = 0.0f;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = 0.0f;
+    VK_CHECK(vkCreateSampler(g_ctx->device(), &samplerInfo, nullptr, &g_textureSampler));
+}
+
+void createDescriptorSet() {
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    g_descriptorPool = std::make_unique<kazu::DescriptorPool>(*g_ctx, poolInfo);
+
+    g_descriptorSet = g_descriptorPool->allocate(g_descriptorSetLayout->handle());
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = g_textureImage->view();
+    imageInfo.sampler = g_textureSampler;
+
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = g_descriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pImageInfo = &imageInfo;
+
+    vkUpdateDescriptorSets(g_ctx->device(), 1, &descriptorWrite, 0, nullptr);
+}
+
 void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -324,6 +471,8 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkBuffer vertexBuffers[] = { g_vertexBuffer->handle() };
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout->handle(),
+                            0, 1, &g_descriptorSet, 0, nullptr);
     vkCmdDraw(cmd, static_cast<uint32_t>(g_vertices.size()), 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
@@ -480,31 +629,8 @@ void initVulkan() {
     createCommandPool();
     createCommandBuffers();
     createSyncObjects();
-
-    // ============================================================================
-    // Verify DescriptorSetLayout + DescriptorPool (Nano-02.8)
-    // ============================================================================
-    {
-        VkDescriptorSetLayoutCreateInfo dslInfo{};
-        dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        kazu::DescriptorSetLayout testLayout(*g_ctx, dslInfo);
-
-        VkDescriptorPoolSize poolSize{};
-        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize.descriptorCount = 1;
-
-        VkDescriptorPoolCreateInfo poolInfo{};
-        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        poolInfo.maxSets = 1;
-        poolInfo.poolSizeCount = 1;
-        poolInfo.pPoolSizes = &poolSize;
-        kazu::DescriptorPool testPool(*g_ctx, poolInfo);
-
-        VkDescriptorSet testSet = testPool.allocate(testLayout.handle());
-        testPool.free(testSet);
-        spdlog::info("[Verify] DescriptorSetLayout + DescriptorPool: create/allocate/free/destroy OK");
-    }
+    createTextureImage();
+    createDescriptorSet();
 }
 
 void cleanup() {
@@ -523,10 +649,17 @@ void cleanup() {
 
     vkDestroyCommandPool(g_ctx->device(), commandPool, nullptr);
 
+    if (g_textureSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(g_ctx->device(), g_textureSampler, nullptr);
+        g_textureSampler = VK_NULL_HANDLE;
+    }
+    g_textureImage.reset();
+    g_descriptorPool.reset();
     g_vertexBuffer.reset();
 
     g_graphicsPipeline.reset();
     g_pipelineLayout.reset();
+    g_descriptorSetLayout.reset();
     g_renderPass.reset();
     g_swapchain.reset();
     // Context destructor handles device/instance/debugMessenger cleanup

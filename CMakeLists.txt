@@ -75,3 +75,9 @@ add_custom_command(TARGET KazuEngine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     ${SHADER_BINARY_DIR} $<TARGET_FILE_DIR:KazuEngine>/shaders
 )
+
+# Copy texture to build dir
+add_custom_command(TARGET KazuEngine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    "D:/code/projects/LearnOpenGL/image/container.png" $<TARGET_FILE_DIR:KazuEngine>/container.png
+)
