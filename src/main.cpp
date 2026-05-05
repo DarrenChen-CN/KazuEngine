@@ -499,16 +499,7 @@ void drawFrame() {
         renderFinishedSemaphore,
         g_syncObjects->inFlight(currentFrame));
 
-    VkPresentInfoKHR presentInfo{};
-    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &renderFinishedSemaphore;
-    presentInfo.swapchainCount = 1;
-    VkSwapchainKHR swapchainHandle = g_swapchain->handle();
-    presentInfo.pSwapchains = &swapchainHandle;
-    presentInfo.pImageIndices = &imageIndex;
-
-    result = vkQueuePresentKHR(g_ctx->presentQueue(), &presentInfo);
+    result = g_swapchain->presentImage(imageIndex, renderFinishedSemaphore);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
         g_framebufferResized = false;
         recreateSwapchain();
