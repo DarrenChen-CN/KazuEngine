@@ -15,6 +15,7 @@
 #include "core/Utils.h"
 #include "core/Context.h"
 #include "core/Swapchain.h"
+#include "core/Buffer.h"
 
 #include <iostream>
 #include <vector>
@@ -24,6 +25,7 @@
 #include <cstring>
 #include <optional>
 #include <set>
+#include <array>
 
 // ============================================================================
 // Section 1: Configuration & Globals
@@ -63,6 +65,20 @@ std::vector<VkFence> inFlightFences;
 std::vector<VkSemaphore> imageRenderFinishedSemaphores; // per swapchain image
 uint32_t currentFrame = 0;
 bool g_framebufferResized = false;
+
+// Vertex data for triangle MVP
+struct Vertex {
+    float pos[2];
+    float color[3];
+};
+
+const std::vector<Vertex> g_vertices = {
+    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+};
+
+std::unique_ptr<kazu::Buffer> g_vertexBuffer;
 
 // ============================================================================
 // Section 2: Utility Functions
@@ -167,11 +183,29 @@ void createGraphicsPipeline() {
 
     VkPipelineShaderStageCreateInfo shaderStages[] = { vertStageInfo, fragStageInfo };
 
-    // Vertex Input: empty (hard-coded in shader)
+    // Vertex Input: binding + attributes
+    VkVertexInputBindingDescription bindingDescription{};
+    bindingDescription.binding = 0;
+    bindingDescription.stride = sizeof(Vertex);
+    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions{};
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0;
+    attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[0].offset = offsetof(Vertex, pos);
+
+    attributeDescriptions[1].binding = 0;
+    attributeDescriptions[1].location = 1;
+    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[1].offset = offsetof(Vertex, color);
+
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0;
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -301,7 +335,11 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+
+    VkBuffer vertexBuffers[] = { g_vertexBuffer->handle() };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+    vkCmdDraw(cmd, static_cast<uint32_t>(g_vertices.size()), 1, 0, 0);
     vkCmdEndRenderPass(cmd);
 
     vkEndCommandBuffer(cmd);
@@ -438,12 +476,22 @@ void drawFrame() {
 // Section 13: Initialization & Cleanup
 // ============================================================================
 
+void createVertexBuffer() {
+    VkDeviceSize bufferSize = sizeof(g_vertices[0]) * g_vertices.size();
+    g_vertexBuffer = std::make_unique<kazu::Buffer>(
+        *g_ctx, bufferSize,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    g_vertexBuffer->upload(g_vertices.data(), bufferSize);
+}
+
 void initVulkan() {
     g_ctx = std::make_unique<kazu::Context>("KazuEngine", true);
     g_swapchain = std::make_unique<kazu::Swapchain>(*g_ctx, window, VK_NULL_HANDLE);
     createRenderPass();
     g_swapchain->createFramebuffers(renderPass);
     createGraphicsPipeline();
+    createVertexBuffer();
     createCommandPool();
     createCommandBuffers();
     createSyncObjects();
@@ -464,6 +512,8 @@ void cleanup() {
     }
 
     vkDestroyCommandPool(g_ctx->device(), commandPool, nullptr);
+
+    g_vertexBuffer.reset();
 
     vkDestroyPipeline(g_ctx->device(), graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(g_ctx->device(), pipelineLayout, nullptr);
