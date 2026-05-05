@@ -68,16 +68,11 @@ bool g_framebufferResized = false;
 // Section 2: Utility Functions
 // ============================================================================
 
-[[noreturn]] void fatalError(const std::string& msg) {
-    spdlog::error("[FATAL] {}", msg);
-    throw std::runtime_error(msg);
-}
-
 std::vector<char> readFile(const std::string& filename) {
     FILE* file = nullptr;
     fopen_s(&file, filename.c_str(), "rb");
     if (!file) {
-        fatalError("Failed to open file: " + filename);
+        kazu::fatalError("Failed to open file: " + filename);
     }
     fseek(file, 0, SEEK_END);
     size_t size = ftell(file);
@@ -134,7 +129,7 @@ void createRenderPass() {
     renderPassInfo.pDependencies = &dependency;
 
     if (vkCreateRenderPass(g_ctx->device(), &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
-        fatalError("Failed to create render pass!");
+        kazu::fatalError("Failed to create render pass!");
     }
 }
 
@@ -146,7 +141,7 @@ VkShaderModule createShaderModule(const std::vector<char>& code) {
 
     VkShaderModule shaderModule;
     if (vkCreateShaderModule(g_ctx->device(), &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        fatalError("Failed to create shader module!");
+        kazu::fatalError("Failed to create shader module!");
     }
     return shaderModule;
 }
@@ -232,7 +227,7 @@ void createGraphicsPipeline() {
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 
     if (vkCreatePipelineLayout(g_ctx->device(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        fatalError("Failed to create pipeline layout!");
+        kazu::fatalError("Failed to create pipeline layout!");
     }
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
@@ -250,7 +245,7 @@ void createGraphicsPipeline() {
     pipelineInfo.subpass = 0;
 
     if (vkCreateGraphicsPipelines(g_ctx->device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS) {
-        fatalError("Failed to create graphics pipeline!");
+        kazu::fatalError("Failed to create graphics pipeline!");
     }
 
     vkDestroyShaderModule(g_ctx->device(), fragModule, nullptr);
@@ -269,7 +264,7 @@ void createCommandPool() {
     poolInfo.queueFamilyIndex = g_ctx->graphicsFamily();
 
     if (vkCreateCommandPool(g_ctx->device(), &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-        fatalError("Failed to create command pool!");
+        kazu::fatalError("Failed to create command pool!");
     }
 }
 
@@ -282,7 +277,7 @@ void createCommandBuffers() {
     allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
 
     if (vkAllocateCommandBuffers(g_ctx->device(), &allocInfo, commandBuffers.data()) != VK_SUCCESS) {
-        fatalError("Failed to allocate command buffers!");
+        kazu::fatalError("Failed to allocate command buffers!");
     }
 }
 
@@ -332,7 +327,7 @@ void createSyncObjects() {
         if (vkCreateSemaphore(g_ctx->device(), &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
             vkCreateSemaphore(g_ctx->device(), &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
             vkCreateFence(g_ctx->device(), &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS) {
-            fatalError("Failed to create sync objects!");
+            kazu::fatalError("Failed to create sync objects!");
         }
     }
 
@@ -340,7 +335,7 @@ void createSyncObjects() {
     imageRenderFinishedSemaphores.resize(g_swapchain->imageCount());
     for (size_t i = 0; i < g_swapchain->imageCount(); ++i) {
         if (vkCreateSemaphore(g_ctx->device(), &semaphoreInfo, nullptr, &imageRenderFinishedSemaphores[i]) != VK_SUCCESS) {
-            fatalError("Failed to create image render finished semaphore!");
+            kazu::fatalError("Failed to create image render finished semaphore!");
         }
     }
 }
@@ -387,7 +382,7 @@ void drawFrame() {
         recreateSwapchain();
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-        fatalError("Failed to acquire swap chain image!");
+        kazu::fatalError("Failed to acquire swap chain image!");
     }
 
     // Check if resize was requested via callback while waiting for fence
@@ -433,7 +428,7 @@ void drawFrame() {
         g_framebufferResized = false;
         recreateSwapchain();
     } else if (result != VK_SUCCESS) {
-        fatalError("Failed to present swap chain image!");
+        kazu::fatalError("Failed to present swap chain image!");
     }
 
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -492,7 +487,7 @@ int main() {
 
     window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "KazuEngine - Triangle MVP", nullptr, nullptr);
     if (!window) {
-        fatalError("Failed to create GLFW window!");
+        kazu::fatalError("Failed to create GLFW window!");
     }
 
     try {
