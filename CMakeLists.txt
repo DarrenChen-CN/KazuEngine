@@ -7,14 +7,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Find Vulkan
 find_package(Vulkan REQUIRED)
 
-# Find or fetch GLFW
+# Dependencies fetched via FetchContent: source goes to external/, build artifacts to build/
+include(FetchContent)
+
+# GLFW
 find_package(glfw3 QUIET)
 if(NOT glfw3_FOUND)
-    include(FetchContent)
     FetchContent_Declare(
         glfw
         GIT_REPOSITORY https://github.com/glfw/glfw.git
         GIT_TAG        3.3.8
+        SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/glfw
+        BINARY_DIR     ${CMAKE_BINARY_DIR}/glfw-build
+        SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/glfw-subbuild
     )
     set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
     set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -30,8 +35,25 @@ FetchContent_Declare(
     vma
     GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDks/VulkanMemoryAllocator.git
     GIT_TAG        v3.1.0
+    SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/vma
+    BINARY_DIR     ${CMAKE_BINARY_DIR}/vma-build
+    SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/vma-subbuild
 )
 FetchContent_MakeAvailable(vma)
+
+# SPIRV-Reflect (for shader reflection)
+FetchContent_Declare(
+    spirv-reflect
+    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Reflect.git
+    GIT_TAG        vulkan-sdk-1.3.275.0
+    SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/spirv-reflect
+    BINARY_DIR     ${CMAKE_BINARY_DIR}/spirv-reflect-build
+    SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/spirv-reflect-subbuild
+)
+FetchContent_GetProperties(spirv-reflect)
+if(NOT spirv-reflect_POPULATED)
+    FetchContent_Populate(spirv-reflect)
+endif()
 
 # Executable
 file(GLOB_RECURSE SOURCES src/*.cpp)
@@ -45,7 +67,12 @@ target_link_libraries(KazuEngine PRIVATE
 
 target_include_directories(KazuEngine PRIVATE
     ${vma_SOURCE_DIR}/include
+    ${spirv-reflect_SOURCE_DIR}
+    ${spirv-reflect_SOURCE_DIR}/include
 )
+
+# SPIRV-Reflect C implementation
+target_sources(KazuEngine PRIVATE ${spirv-reflect_SOURCE_DIR}/spirv_reflect.c)
 
 # Shader compilation
 find_program(GLSLANG_VALIDATOR glslangValidator 

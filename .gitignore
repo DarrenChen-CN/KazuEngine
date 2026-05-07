@@ -37,3 +37,11 @@ imgui.ini
 
 # Local docs
 docs/
+
+# FetchContent dependencies (downloaded to external/)
+/external/glfw/
+/external/vma/
+/external/spirv-reflect/
+/external/spirv-reflect-build/
+/external/glfw-build/
+/external/vma-build/

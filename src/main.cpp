@@ -16,7 +16,6 @@
 #include "core/Context.h"
 #include "core/Swapchain.h"
 #include "core/Buffer.h"
-#include "core/ShaderModule.h"
 #include "core/RenderPass.h"
 #include "core/PipelineLayout.h"
 #include "core/GraphicsPipeline.h"
@@ -27,6 +26,9 @@
 #include "core/CommandBuffer.h"
 #include "core/SyncObjects.h"
 #include "core/Sampler.h"
+#include "rhi/ShaderLibrary.h"
+#include "rhi/PipelineBuilder.h"
+#include "rhi/DescriptorSetLayoutCache.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "core/stb_image.h"
@@ -71,6 +73,7 @@ GLFWwindow* window = nullptr;
 std::unique_ptr<kazu::RenderPass> g_renderPass;
 std::unique_ptr<kazu::PipelineLayout> g_pipelineLayout;
 std::unique_ptr<kazu::GraphicsPipeline> g_graphicsPipeline;
+std::unique_ptr<kazu::ShaderLibrary> g_shaderLibrary;
 std::unique_ptr<kazu::CommandPool> g_commandPool;
 std::vector<std::unique_ptr<kazu::CommandBuffer>> g_commandBuffers;
 std::unique_ptr<kazu::SyncObjects> g_syncObjects;
@@ -96,6 +99,7 @@ const std::vector<Vertex> g_vertices = {
 std::unique_ptr<kazu::Buffer> g_vertexBuffer;
 std::unique_ptr<kazu::Image> g_textureImage;
 std::unique_ptr<kazu::Sampler> g_textureSampler;
+std::unique_ptr<kazu::DescriptorSetLayoutCache> g_descriptorSetLayoutCache;
 std::unique_ptr<kazu::DescriptorSetLayout> g_descriptorSetLayout;
 std::unique_ptr<kazu::DescriptorPool> g_descriptorPool;
 VkDescriptorSet g_descriptorSet = VK_NULL_HANDLE;
@@ -103,21 +107,6 @@ VkDescriptorSet g_descriptorSet = VK_NULL_HANDLE;
 // ============================================================================
 // Section 2: Utility Functions
 // ============================================================================
-
-std::vector<char> readFile(const std::string& filename) {
-    FILE* file = nullptr;
-    fopen_s(&file, filename.c_str(), "rb");
-    if (!file) {
-        kazu::fatalError("Failed to open file: " + filename);
-    }
-    fseek(file, 0, SEEK_END);
-    size_t size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    std::vector<char> buffer(size);
-    fread(buffer.data(), 1, size, file);
-    fclose(file);
-    return buffer;
-}
 
 // ============================================================================
 // Section 3: Queue Family / Surface / Swapchain (moved to Context/Swapchain classes)
@@ -168,142 +157,16 @@ void createRenderPass() {
 }
 
 void createGraphicsPipeline() {
-    auto vertCode = readFile("shaders/triangle.vert.spv");
-    auto fragCode = readFile("shaders/triangle.frag.spv");
+    kazu::PipelineBuilder builder(*g_ctx, *g_shaderLibrary);
+    builder.shader("shaders/triangle.vert.spv")
+           .shader("shaders/triangle.frag.spv")
+           .renderPass(g_renderPass->handle())
+           .viewport(g_swapchain->extent());
+    builder.build();
 
-    kazu::ShaderModule vertModule(*g_ctx, vertCode);
-    kazu::ShaderModule fragModule(*g_ctx, fragCode);
-
-    VkPipelineShaderStageCreateInfo vertStageInfo{};
-    vertStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    vertStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-    vertStageInfo.module = vertModule.handle();
-    vertStageInfo.pName = "main";
-
-    VkPipelineShaderStageCreateInfo fragStageInfo{};
-    fragStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    fragStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-    fragStageInfo.module = fragModule.handle();
-    fragStageInfo.pName = "main";
-
-    VkPipelineShaderStageCreateInfo shaderStages[] = { vertStageInfo, fragStageInfo };
-
-    // Vertex Input: binding + attributes
-    VkVertexInputBindingDescription bindingDescription{};
-    bindingDescription.binding = 0;
-    bindingDescription.stride = sizeof(Vertex);
-    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions{};
-    attributeDescriptions[0].binding = 0;
-    attributeDescriptions[0].location = 0;
-    attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
-    attributeDescriptions[0].offset = offsetof(Vertex, pos);
-
-    attributeDescriptions[1].binding = 0;
-    attributeDescriptions[1].location = 1;
-    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-    attributeDescriptions[1].offset = offsetof(Vertex, color);
-
-    attributeDescriptions[2].binding = 0;
-    attributeDescriptions[2].location = 2;
-    attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
-    attributeDescriptions[2].offset = offsetof(Vertex, texCoord);
-
-    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
-    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 1;
-    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
-    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    inputAssembly.primitiveRestartEnable = VK_FALSE;
-
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(g_swapchain->extent().width);
-    viewport.height = static_cast<float>(g_swapchain->extent().height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-
-    VkRect2D scissor{};
-    scissor.offset = { 0, 0 };
-    scissor.extent = g_swapchain->extent();
-
-    VkPipelineViewportStateCreateInfo viewportState{};
-    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
-    viewportState.viewportCount = 1;
-    viewportState.pViewports = &viewport;
-    viewportState.scissorCount = 1;
-    viewportState.pScissors = &scissor;
-
-    VkPipelineRasterizationStateCreateInfo rasterizer{};
-    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_FALSE;
-    rasterizer.rasterizerDiscardEnable = VK_FALSE;
-    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
-    rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
-    rasterizer.depthBiasEnable = VK_FALSE;
-
-    VkPipelineMultisampleStateCreateInfo multisampling{};
-    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-                                        | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
-
-    VkPipelineColorBlendStateCreateInfo colorBlending{};
-    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
-
-    VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-    samplerLayoutBinding.binding = 0;
-    samplerLayoutBinding.descriptorCount = 1;
-    samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    samplerLayoutBinding.pImmutableSamplers = nullptr;
-    samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutCreateInfo descriptorSetLayoutInfo{};
-    descriptorSetLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    descriptorSetLayoutInfo.bindingCount = 1;
-    descriptorSetLayoutInfo.pBindings = &samplerLayoutBinding;
-    g_descriptorSetLayout = std::make_unique<kazu::DescriptorSetLayout>(*g_ctx, descriptorSetLayoutInfo);
-
-    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
-    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
-    VkDescriptorSetLayout dslHandle = g_descriptorSetLayout->handle();
-    pipelineLayoutInfo.pSetLayouts = &dslHandle;
-    g_pipelineLayout = std::make_unique<kazu::PipelineLayout>(*g_ctx, pipelineLayoutInfo);
-
-    VkGraphicsPipelineCreateInfo pipelineInfo{};
-    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
-    pipelineInfo.stageCount = 2;
-    pipelineInfo.pStages = shaderStages;
-    pipelineInfo.pVertexInputState = &vertexInputInfo;
-    pipelineInfo.pInputAssemblyState = &inputAssembly;
-    pipelineInfo.pViewportState = &viewportState;
-    pipelineInfo.pRasterizationState = &rasterizer;
-    pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.layout = g_pipelineLayout->handle();
-    pipelineInfo.renderPass = g_renderPass->handle();
-    pipelineInfo.subpass = 0;
-
-    g_graphicsPipeline = std::make_unique<kazu::GraphicsPipeline>(*g_ctx, pipelineInfo);
-
-    // ShaderModules / PipelineLayout destroyed automatically by RAII when function returns
+    g_graphicsPipeline = builder.releasePipeline();
+    g_pipelineLayout = builder.releaseLayout();
+    g_descriptorSetLayout = builder.releaseDescriptorSetLayout();
 }
 
 // ============================================================================
@@ -526,9 +389,25 @@ void createVertexBuffer() {
 void initVulkan() {
     g_ctx = std::make_unique<kazu::Context>("KazuEngine", true);
     g_swapchain = std::make_unique<kazu::Swapchain>(*g_ctx, window, VK_NULL_HANDLE);
+    g_shaderLibrary = std::make_unique<kazu::ShaderLibrary>(*g_ctx);
     createRenderPass();
     g_swapchain->createFramebuffers(g_renderPass->handle());
     createGraphicsPipeline();
+    g_shaderLibrary->logReflections();
+
+    // 3.2: DescriptorSetLayoutCache validation
+    g_descriptorSetLayoutCache = std::make_unique<kazu::DescriptorSetLayoutCache>(*g_ctx);
+    VkDescriptorSetLayoutBinding testBinding{};
+    testBinding.binding = 0;
+    testBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    testBinding.descriptorCount = 1;
+    testBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    auto h1 = g_descriptorSetLayoutCache->getOrCreate({testBinding});
+    auto h2 = g_descriptorSetLayoutCache->getOrCreate({testBinding});
+    if (h1 == h2 && g_descriptorSetLayoutCache->cacheSize() == 1) {
+        spdlog::info("[DescriptorSetLayoutCache] Verified: duplicate bindings return same handle");
+    }
+
     createVertexBuffer();
     createCommandPoolAndBuffers();
     createSyncObjects();
@@ -552,8 +431,10 @@ void cleanup() {
     g_vertexBuffer.reset();
 
     g_graphicsPipeline.reset();
+    g_shaderLibrary.reset();
     g_pipelineLayout.reset();
     g_descriptorSetLayout.reset();
+    g_descriptorSetLayoutCache.reset();
     g_renderPass.reset();
     g_swapchain.reset();
     // Context destructor handles device/instance/debugMessenger cleanup
