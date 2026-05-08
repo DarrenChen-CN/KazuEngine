@@ -55,8 +55,8 @@ static std::vector<ShaderPushConstantRange> mergePushConstantRanges(
     return result;
 }
 
-PipelineBuilder::PipelineBuilder(Context& ctx, ShaderLibrary& shaderLib)
-    : m_ctx(ctx), m_shaderLib(shaderLib) {}
+PipelineBuilder::PipelineBuilder(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLayoutCache& dslCache)
+    : m_ctx(ctx), m_shaderLib(shaderLib), m_dslCache(dslCache) {}
 
 PipelineBuilder& PipelineBuilder::shader(const std::string& path) {
     m_shaderPaths.push_back(path);
@@ -66,11 +66,6 @@ PipelineBuilder& PipelineBuilder::shader(const std::string& path) {
 PipelineBuilder& PipelineBuilder::renderPass(VkRenderPass rp, uint32_t subpass) {
     m_renderPass = rp;
     m_subpass = subpass;
-    return *this;
-}
-
-PipelineBuilder& PipelineBuilder::viewport(const VkExtent2D& extent) {
-    m_extent = extent;
     return *this;
 }
 
@@ -104,7 +99,7 @@ PipelineBuilder& PipelineBuilder::samples(VkSampleCountFlagBits samples) {
     return *this;
 }
 
-void PipelineBuilder::build() {
+PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     if (m_shaderPaths.empty()) {
         fatalError("PipelineBuilder: no shaders specified");
     }
@@ -131,28 +126,11 @@ void PipelineBuilder::build() {
         stages.push_back(stageInfo);
     }
 
-    createDescriptorSetLayout(reflections);
-    createPipelineLayout(reflections);
-    createGraphicsPipeline(stages);
-
-    spdlog::info("[PipelineBuilder] Pipeline built with {} shader(s), {} descriptor binding(s)",
-                 stages.size(),
-                 mergeDescriptorBindings(reflections).size());
-}
-
-void PipelineBuilder::createDescriptorSetLayout(const std::vector<ShaderReflection>& reflections) {
-    auto bindings = mergeDescriptorBindings(reflections);
-    if (bindings.empty()) {
-        // No descriptor bindings: create an empty layout
-        VkDescriptorSetLayoutCreateInfo info{};
-        info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        m_descriptorSetLayout = std::make_unique<DescriptorSetLayout>(m_ctx, info);
-        return;
-    }
-
+    // Generate descriptor bindings (merged across stages)
+    auto mergedBindings = mergeDescriptorBindings(reflections);
     std::vector<VkDescriptorSetLayoutBinding> vkBindings;
-    vkBindings.reserve(bindings.size());
-    for (const auto& b : bindings) {
+    vkBindings.reserve(mergedBindings.size());
+    for (const auto& b : mergedBindings) {
         VkDescriptorSetLayoutBinding vkBinding{};
         vkBinding.binding = b.binding;
         vkBinding.descriptorType = b.descriptorType;
@@ -162,14 +140,10 @@ void PipelineBuilder::createDescriptorSetLayout(const std::vector<ShaderReflecti
         vkBindings.push_back(vkBinding);
     }
 
-    VkDescriptorSetLayoutCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    info.bindingCount = static_cast<uint32_t>(vkBindings.size());
-    info.pBindings = vkBindings.data();
-    m_descriptorSetLayout = std::make_unique<DescriptorSetLayout>(m_ctx, info);
-}
+    // Get or create DescriptorSetLayout via cache
+    VkDescriptorSetLayout dslHandle = m_dslCache.getOrCreate(vkBindings);
 
-void PipelineBuilder::createPipelineLayout(const std::vector<ShaderReflection>& reflections) {
+    // Create PipelineLayout
     auto pcRanges = mergePushConstantRanges(reflections);
     std::vector<VkPushConstantRange> vkRanges;
     vkRanges.reserve(pcRanges.size());
@@ -177,79 +151,88 @@ void PipelineBuilder::createPipelineLayout(const std::vector<ShaderReflection>& 
         vkRanges.push_back({pc.stageFlags, pc.offset, pc.size});
     }
 
-    VkPipelineLayoutCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    VkDescriptorSetLayout dslHandle = m_descriptorSetLayout->handle();
-    info.setLayoutCount = 1;
-    info.pSetLayouts = &dslHandle;
+    VkPipelineLayoutCreateInfo plInfo{};
+    plInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plInfo.setLayoutCount = 1;
+    plInfo.pSetLayouts = &dslHandle;
     if (!vkRanges.empty()) {
-        info.pushConstantRangeCount = static_cast<uint32_t>(vkRanges.size());
-        info.pPushConstantRanges = vkRanges.data();
+        plInfo.pushConstantRangeCount = static_cast<uint32_t>(vkRanges.size());
+        plInfo.pPushConstantRanges = vkRanges.data();
     }
-    m_pipelineLayout = std::make_unique<PipelineLayout>(m_ctx, info);
-}
+    auto pipelineLayout = std::make_unique<PipelineLayout>(m_ctx, plInfo);
 
-void PipelineBuilder::createGraphicsPipeline(const std::vector<VkPipelineShaderStageCreateInfo>& stages) {
-    // Vertex Input: auto-generated from vertex shader reflection
-    VkVertexInputBindingDescription bindingDescription{};
-    bindingDescription.binding = 0;
-    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-
-    std::vector<VkVertexInputAttributeDescription> attributeDescriptions;
+    // Generate vertex input from vertex shader reflection
+    std::vector<VkVertexInputBindingDescription> vertexBindings;
+    std::vector<VkVertexInputAttributeDescription> vertexAttributes;
     uint32_t stride = 0;
 
     for (const auto& path : m_shaderPaths) {
         const auto& refl = m_shaderLib.getReflection(path);
         if (refl.stage != VK_SHADER_STAGE_VERTEX_BIT) continue;
 
-        attributeDescriptions.reserve(refl.vertexInputs.size());
+        vertexAttributes.reserve(refl.vertexInputs.size());
         for (const auto& input : refl.vertexInputs) {
             VkVertexInputAttributeDescription desc{};
             desc.binding = 0;
             desc.location = input.location;
             desc.format = input.format;
             desc.offset = stride;
-            attributeDescriptions.push_back(desc);
+            vertexAttributes.push_back(desc);
             stride += formatSize(input.format);
         }
-        break; // Only one vertex shader expected
+        break;
     }
-    bindingDescription.stride = stride;
 
+    if (stride > 0) {
+        VkVertexInputBindingDescription binding{};
+        binding.binding = 0;
+        binding.stride = stride;
+        binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        vertexBindings.push_back(binding);
+    }
+
+    // Assemble PipelineState (used as cache key)
+    PipelineState state{};
+    state.shaderPaths = m_shaderPaths;
+    state.renderPass = m_renderPass;
+    state.subpass = m_subpass;
+    state.topology = m_topology;
+    state.cullMode = m_cullMode;
+    state.frontFace = m_frontFace;
+    state.polygonMode = m_polygonMode;
+    state.lineWidth = m_lineWidth;
+    state.samples = m_samples;
+    state.vertexBindings = vertexBindings;
+    state.vertexAttributes = vertexAttributes;
+    state.descriptorSetLayout = dslHandle;
+    state.pipelineLayout = pipelineLayout->handle();
+
+    // Check cache
+    auto* cached = cache.find(state);
+    if (cached) {
+        spdlog::info("[PipelineBuilder] Pipeline cache hit ({} shader(s))", m_shaderPaths.size());
+        return {cached, std::move(pipelineLayout), dslHandle};
+    }
+
+    // Cache miss: create GraphicsPipeline
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = stride > 0 ? 1 : 0;
-    vertexInputInfo.pVertexBindingDescriptions = stride > 0 ? &bindingDescription : nullptr;
-    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
-    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
+    vertexInputInfo.vertexBindingDescriptionCount = static_cast<uint32_t>(vertexBindings.size());
+    vertexInputInfo.pVertexBindingDescriptions = vertexBindings.empty() ? nullptr : vertexBindings.data();
+    vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size());
+    vertexInputInfo.pVertexAttributeDescriptions = vertexAttributes.empty() ? nullptr : vertexAttributes.data();
 
-    // Input Assembly
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = m_topology;
     inputAssembly.primitiveRestartEnable = VK_FALSE;
 
-    // Viewport & Scissor
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(m_extent.width);
-    viewport.height = static_cast<float>(m_extent.height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = m_extent;
-
+    // Viewport state: empty because we use dynamic state
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewportState.viewportCount = 1;
-    viewportState.pViewports = &viewport;
     viewportState.scissorCount = 1;
-    viewportState.pScissors = &scissor;
 
-    // Rasterizer
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rasterizer.depthClampEnable = VK_FALSE;
@@ -260,13 +243,11 @@ void PipelineBuilder::createGraphicsPipeline(const std::vector<VkPipelineShaderS
     rasterizer.frontFace = m_frontFace;
     rasterizer.depthBiasEnable = VK_FALSE;
 
-    // Multisample
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = m_samples;
 
-    // Color Blend
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
                                         | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -278,8 +259,11 @@ void PipelineBuilder::createGraphicsPipeline(const std::vector<VkPipelineShaderS
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
-    // Dynamic state (optional, for viewport/scissor if we want to set them at cmd time)
-    // Currently static for simplicity
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{};
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -291,36 +275,19 @@ void PipelineBuilder::createGraphicsPipeline(const std::vector<VkPipelineShaderS
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
-    pipelineInfo.layout = m_pipelineLayout->handle();
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = pipelineLayout->handle();
     pipelineInfo.renderPass = m_renderPass;
     pipelineInfo.subpass = m_subpass;
 
-    m_graphicsPipeline = std::make_unique<GraphicsPipeline>(m_ctx, pipelineInfo);
-}
+    auto pipeline = std::make_unique<GraphicsPipeline>(m_ctx, pipelineInfo);
+    auto* pipelinePtr = pipeline.get();
+    cache.insert(state, std::move(pipeline));
 
-// Release methods
-std::unique_ptr<GraphicsPipeline> PipelineBuilder::releasePipeline() {
-    return std::move(m_graphicsPipeline);
-}
+    spdlog::info("[PipelineBuilder] Pipeline created and cached ({} shader(s), {} bindings)",
+                 stages.size(), mergedBindings.size());
 
-std::unique_ptr<PipelineLayout> PipelineBuilder::releaseLayout() {
-    return std::move(m_pipelineLayout);
-}
-
-std::unique_ptr<DescriptorSetLayout> PipelineBuilder::releaseDescriptorSetLayout() {
-    return std::move(m_descriptorSetLayout);
-}
-
-VkPipeline PipelineBuilder::pipelineHandle() const {
-    return m_graphicsPipeline ? m_graphicsPipeline->handle() : VK_NULL_HANDLE;
-}
-
-VkPipelineLayout PipelineBuilder::layoutHandle() const {
-    return m_pipelineLayout ? m_pipelineLayout->handle() : VK_NULL_HANDLE;
-}
-
-VkDescriptorSetLayout PipelineBuilder::descriptorSetLayoutHandle() const {
-    return m_descriptorSetLayout ? m_descriptorSetLayout->handle() : VK_NULL_HANDLE;
+    return {pipelinePtr, std::move(pipelineLayout), dslHandle};
 }
 
 } // namespace kazu

@@ -28,6 +28,7 @@
 #include "core/Sampler.h"
 #include "rhi/ShaderLibrary.h"
 #include "rhi/PipelineBuilder.h"
+#include "rhi/PipelineCache.h"
 #include "rhi/DescriptorSetLayoutCache.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -72,8 +73,9 @@ std::unique_ptr<kazu::Swapchain> g_swapchain;
 GLFWwindow* window = nullptr;
 std::unique_ptr<kazu::RenderPass> g_renderPass;
 std::unique_ptr<kazu::PipelineLayout> g_pipelineLayout;
-std::unique_ptr<kazu::GraphicsPipeline> g_graphicsPipeline;
+kazu::GraphicsPipeline* g_graphicsPipeline = nullptr;  // borrowed from PipelineCache
 std::unique_ptr<kazu::ShaderLibrary> g_shaderLibrary;
+std::unique_ptr<kazu::PipelineCache> g_pipelineCache;
 std::unique_ptr<kazu::CommandPool> g_commandPool;
 std::vector<std::unique_ptr<kazu::CommandBuffer>> g_commandBuffers;
 std::unique_ptr<kazu::SyncObjects> g_syncObjects;
@@ -100,7 +102,7 @@ std::unique_ptr<kazu::Buffer> g_vertexBuffer;
 std::unique_ptr<kazu::Image> g_textureImage;
 std::unique_ptr<kazu::Sampler> g_textureSampler;
 std::unique_ptr<kazu::DescriptorSetLayoutCache> g_descriptorSetLayoutCache;
-std::unique_ptr<kazu::DescriptorSetLayout> g_descriptorSetLayout;
+VkDescriptorSetLayout g_descriptorSetLayout = VK_NULL_HANDLE;  // from DescriptorSetLayoutCache
 std::unique_ptr<kazu::DescriptorPool> g_descriptorPool;
 VkDescriptorSet g_descriptorSet = VK_NULL_HANDLE;
 
@@ -157,16 +159,15 @@ void createRenderPass() {
 }
 
 void createGraphicsPipeline() {
-    kazu::PipelineBuilder builder(*g_ctx, *g_shaderLibrary);
+    kazu::PipelineBuilder builder(*g_ctx, *g_shaderLibrary, *g_descriptorSetLayoutCache);
     builder.shader("shaders/triangle.vert.spv")
            .shader("shaders/triangle.frag.spv")
-           .renderPass(g_renderPass->handle())
-           .viewport(g_swapchain->extent());
-    builder.build();
+           .renderPass(g_renderPass->handle());
+    auto result = builder.build(*g_pipelineCache);
 
-    g_graphicsPipeline = builder.releasePipeline();
-    g_pipelineLayout = builder.releaseLayout();
-    g_descriptorSetLayout = builder.releaseDescriptorSetLayout();
+    g_graphicsPipeline = result.pipeline;
+    g_pipelineLayout = std::move(result.layout);
+    g_descriptorSetLayout = result.descriptorSetLayout;
 }
 
 // ============================================================================
@@ -260,7 +261,7 @@ void createDescriptorSet() {
     poolInfo.pPoolSizes = &poolSize;
     g_descriptorPool = std::make_unique<kazu::DescriptorPool>(*g_ctx, poolInfo);
 
-    g_descriptorSet = g_descriptorPool->allocate(g_descriptorSetLayout->handle());
+    g_descriptorSet = g_descriptorPool->allocate(g_descriptorSetLayout);
 
     VkDescriptorImageInfo imageInfo{};
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -293,6 +294,21 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
 
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_graphicsPipeline->handle());
+
+    // Dynamic viewport & scissor (pipeline created with VK_DYNAMIC_STATE_VIEWPORT/SCISSOR)
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(g_swapchain->extent().width);
+    viewport.height = static_cast<float>(g_swapchain->extent().height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = g_swapchain->extent();
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     VkBuffer vertexBuffers[] = { g_vertexBuffer->handle() };
     VkDeviceSize offsets[] = { 0 };
@@ -390,13 +406,14 @@ void initVulkan() {
     g_ctx = std::make_unique<kazu::Context>("KazuEngine", true);
     g_swapchain = std::make_unique<kazu::Swapchain>(*g_ctx, window, VK_NULL_HANDLE);
     g_shaderLibrary = std::make_unique<kazu::ShaderLibrary>(*g_ctx);
+    g_descriptorSetLayoutCache = std::make_unique<kazu::DescriptorSetLayoutCache>(*g_ctx);
+    g_pipelineCache = std::make_unique<kazu::PipelineCache>(*g_ctx);
     createRenderPass();
     g_swapchain->createFramebuffers(g_renderPass->handle());
     createGraphicsPipeline();
     g_shaderLibrary->logReflections();
 
     // 3.2: DescriptorSetLayoutCache validation
-    g_descriptorSetLayoutCache = std::make_unique<kazu::DescriptorSetLayoutCache>(*g_ctx);
     VkDescriptorSetLayoutBinding testBinding{};
     testBinding.binding = 0;
     testBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -430,11 +447,12 @@ void cleanup() {
     g_descriptorPool.reset();
     g_vertexBuffer.reset();
 
-    g_graphicsPipeline.reset();
+    g_graphicsPipeline = nullptr;            // owned by PipelineCache
     g_shaderLibrary.reset();
     g_pipelineLayout.reset();
-    g_descriptorSetLayout.reset();
-    g_descriptorSetLayoutCache.reset();
+    g_pipelineCache.reset();                  // destroys cached GraphicsPipelines
+    g_descriptorSetLayout = VK_NULL_HANDLE;   // owned by DescriptorSetLayoutCache
+    g_descriptorSetLayoutCache.reset();       // destroys cached DescriptorSetLayouts
     g_renderPass.reset();
     g_swapchain.reset();
     // Context destructor handles device/instance/debugMessenger cleanup
