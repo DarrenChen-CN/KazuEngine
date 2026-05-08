@@ -45,3 +45,6 @@ docs/
 /external/spirv-reflect-build/
 /external/glfw-build/
 /external/vma-build/
+/external/glm/
+/external/glm-src/
+/external/glm-build/

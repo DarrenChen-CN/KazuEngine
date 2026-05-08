@@ -32,6 +32,10 @@
 #include "rhi/DescriptorSetLayoutCache.h"
 #include "rhi/Texture.h"
 #include "rhi/Material.h"
+#include "rhi/Mesh.h"
+
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "core/stb_image.h"
@@ -84,23 +88,7 @@ std::unique_ptr<kazu::SyncObjects> g_syncObjects;
 uint32_t currentFrame = 0;
 bool g_framebufferResized = false;
 
-// Vertex data for triangle MVP
-struct Vertex {
-    float pos[2];
-    float color[3];
-    float texCoord[2];
-};
-
-const std::vector<Vertex> g_vertices = {
-    {{-1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-    {{ 1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-    {{ 1.0f,  1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}},
-    {{-1.0f, -1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-    {{ 1.0f,  1.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 0.0f}},
-    {{-1.0f,  1.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f}}
-};
-
-std::unique_ptr<kazu::Buffer> g_vertexBuffer;
+std::unique_ptr<kazu::Mesh> g_mesh;
 std::unique_ptr<kazu::DescriptorSetLayoutCache> g_descriptorSetLayoutCache;
 VkDescriptorSetLayout g_descriptorSetLayout = VK_NULL_HANDLE;  // from DescriptorSetLayoutCache
 std::unique_ptr<kazu::Texture> g_texture;
@@ -222,13 +210,19 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     scissor.extent = g_swapchain->extent();
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    VkBuffer vertexBuffers[] = { g_vertexBuffer->handle() };
-    VkDeviceSize offsets[] = { 0 };
-    vkCmdBindVertexBuffers(cmd, 0, 1, vertexBuffers, offsets);
+    // Push MVP matrix
+    glm::mat4 model = glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
+    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 1.0f, 3.0f), glm::vec3(0.0f, 0.8f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    float aspect = static_cast<float>(g_swapchain->extent().width) / g_swapchain->extent().height;
+    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
+    proj[1][1] *= -1.0f; // Vulkan Y-flip
+    glm::mat4 mvp = proj * view * model;
+    vkCmdPushConstants(cmd, g_pipelineLayout->handle(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp[0][0]);
+
     VkDescriptorSet materialDS = g_material->descriptorSet();
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout->handle(),
                             0, 1, &materialDS, 0, nullptr);
-    vkCmdDraw(cmd, static_cast<uint32_t>(g_vertices.size()), 1, 0, 0);
+    g_mesh->draw(cmd);
     vkCmdEndRenderPass(cmd);
 }
 
@@ -306,15 +300,6 @@ void drawFrame() {
 // Section 13: Initialization & Cleanup
 // ============================================================================
 
-void createVertexBuffer() {
-    VkDeviceSize bufferSize = sizeof(g_vertices[0]) * g_vertices.size();
-    g_vertexBuffer = std::make_unique<kazu::Buffer>(
-        *g_ctx, bufferSize,
-        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    g_vertexBuffer->upload(g_vertices.data(), bufferSize);
-}
-
 void initVulkan() {
     g_ctx = std::make_unique<kazu::Context>("KazuEngine", true);
     g_swapchain = std::make_unique<kazu::Swapchain>(*g_ctx, window, VK_NULL_HANDLE);
@@ -338,7 +323,8 @@ void initVulkan() {
         spdlog::info("[DescriptorSetLayoutCache] Verified: duplicate bindings return same handle");
     }
 
-    createVertexBuffer();
+    g_mesh = std::make_unique<kazu::Mesh>(kazu::Mesh::loadObj(*g_ctx,
+        "D:/code/projects/CudaRayTracer/Model/Characters/Marry/Marry.obj"));
     createCommandPoolAndBuffers();
     createSyncObjects();
     createTextureAndMaterial();
@@ -356,7 +342,7 @@ void cleanup() {
 
     g_material.reset();
     g_texture.reset();
-    g_vertexBuffer.reset();
+    g_mesh.reset();
 
     g_graphicsPipeline = nullptr;            // owned by PipelineCache
     g_shaderLibrary.reset();
@@ -381,7 +367,7 @@ int main() {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-    window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "KazuEngine - Triangle MVP", nullptr, nullptr);
+    window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "KazuEngine - Mesh (Marry)", nullptr, nullptr);
     if (!window) {
         kazu::fatalError("Failed to create GLFW window!");
     }

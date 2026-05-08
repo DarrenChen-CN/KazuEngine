@@ -41,6 +41,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(vma)
 
+# glm (header-only math library)
+FetchContent_Declare(
+    glm
+    GIT_REPOSITORY https://github.com/g-truc/glm.git
+    GIT_TAG        0.9.9.8
+    SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/glm-src
+    BINARY_DIR     ${CMAKE_BINARY_DIR}/glm-build
+    SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/glm-subbuild
+)
+FetchContent_GetProperties(glm)
+if(NOT glm_POPULATED)
+    FetchContent_Populate(glm)
+endif()
+
 # SPIRV-Reflect (for shader reflection)
 FetchContent_Declare(
     spirv-reflect
@@ -67,6 +81,7 @@ target_link_libraries(KazuEngine PRIVATE
 
 target_include_directories(KazuEngine PRIVATE
     ${vma_SOURCE_DIR}/include
+    ${glm_SOURCE_DIR}
     ${spirv-reflect_SOURCE_DIR}
     ${spirv-reflect_SOURCE_DIR}/include
 )
