@@ -5,7 +5,6 @@
 #include "Texture.h"
 #include "../core/Utils.h"
 #include "../core/Buffer.h"
-#include "../core/CommandPool.h"
 #include "../core/CommandBuffer.h"
 #include "../core/stb_image.h"
 #include <spdlog/spdlog.h>
@@ -32,9 +31,8 @@ Texture::Texture(Context& ctx, const std::string& path) : m_ctx(&ctx) {
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-    // One-time command buffer for layout transition + copy
-    CommandPool tempPool(ctx, ctx.graphicsFamily());
-    CommandBuffer cmd(ctx, tempPool.handle());
+    // One-time command buffer for layout transition + copy (from shared transient pool)
+    CommandBuffer cmd(ctx, ctx.transientPool());
     cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
 
     m_image->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);

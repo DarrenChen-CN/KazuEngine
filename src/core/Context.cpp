@@ -24,6 +24,12 @@ Context::Context(const std::string& appName, bool enableValidation)
         pickPhysicalDevice();
         createLogicalDevice();
 
+        VkCommandPoolCreateInfo transientPoolInfo{};
+        transientPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        transientPoolInfo.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        transientPoolInfo.queueFamilyIndex = m_graphicsFamily;
+        VK_CHECK(vkCreateCommandPool(m_device, &transientPoolInfo, nullptr, &m_transientPool));
+
         VmaAllocatorCreateInfo allocatorInfo{};
         allocatorInfo.physicalDevice = m_physicalDevice;
         allocatorInfo.device = m_device;
@@ -53,6 +59,9 @@ Context::~Context() {
     }
     if (m_device != VK_NULL_HANDLE) {
         vkDeviceWaitIdle(m_device);
+        if (m_transientPool != VK_NULL_HANDLE) {
+            vkDestroyCommandPool(m_device, m_transientPool, nullptr);
+        }
         vkDestroyDevice(m_device, nullptr);
     }
     if (m_validationEnabled && m_debugMessenger != VK_NULL_HANDLE) {
@@ -79,9 +88,11 @@ Context::Context(Context&& other) noexcept
     , m_presentFamily(other.m_presentFamily)
     , m_validationEnabled(other.m_validationEnabled)
     , m_allocator(other.m_allocator)
+    , m_transientPool(other.m_transientPool)
 {
     other.m_instance = VK_NULL_HANDLE;
     other.m_allocator = VK_NULL_HANDLE;
+    other.m_transientPool = VK_NULL_HANDLE;
     other.m_debugMessenger = VK_NULL_HANDLE;
     other.m_physicalDevice = VK_NULL_HANDLE;
     other.m_device = VK_NULL_HANDLE;
@@ -104,9 +115,11 @@ Context& Context::operator=(Context&& other) noexcept {
         m_graphicsFamily = other.m_graphicsFamily;
         m_presentFamily = other.m_presentFamily;
         m_validationEnabled = other.m_validationEnabled;
+        m_transientPool = other.m_transientPool;
 
         other.m_instance = VK_NULL_HANDLE;
         other.m_debugMessenger = VK_NULL_HANDLE;
+        other.m_transientPool = VK_NULL_HANDLE;
         other.m_physicalDevice = VK_NULL_HANDLE;
         other.m_device = VK_NULL_HANDLE;
         other.m_graphicsQueue = VK_NULL_HANDLE;

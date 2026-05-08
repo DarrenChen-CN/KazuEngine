@@ -43,6 +43,7 @@ public:
     uint32_t presentFamily() const { return m_presentFamily; }
     bool validationEnabled() const { return m_validationEnabled; }
     VmaAllocator allocator() const { return m_allocator; }
+    VkCommandPool transientPool() const { return m_transientPool; }
 
 private:
     VkInstance m_instance = VK_NULL_HANDLE;
@@ -55,6 +56,7 @@ private:
     uint32_t m_presentFamily = 0;
     bool m_validationEnabled = false;
     VmaAllocator m_allocator = VK_NULL_HANDLE;
+    VkCommandPool m_transientPool = VK_NULL_HANDLE;
 
     struct QueueFamilyIndices {
         std::optional<uint32_t> graphicsFamily;
