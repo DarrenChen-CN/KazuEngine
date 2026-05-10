@@ -52,6 +52,12 @@ private:
     VkFormat m_format = VK_FORMAT_UNDEFINED;
     VkExtent2D m_extent = {};
 
+    // Depth buffer
+    VkFormat m_depthFormat = VK_FORMAT_D32_SFLOAT;
+    VkImage m_depthImage = VK_NULL_HANDLE;
+    VmaAllocation m_depthAllocation = VK_NULL_HANDLE;
+    VkImageView m_depthImageView = VK_NULL_HANDLE;
+
     struct SwapChainSupportDetails {
         VkSurfaceCapabilitiesKHR capabilities;
         std::vector<VkSurfaceFormatKHR> formats;
@@ -61,6 +67,7 @@ private:
     void createSurface();
     void createSwapchain();
     void createImageViews();
+    void createDepthResources();
 public:
     void createFramebuffers(VkRenderPass renderPass);
 private:

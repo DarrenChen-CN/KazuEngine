@@ -33,6 +33,7 @@
 #include "rhi/Texture.h"
 #include "rhi/Material.h"
 #include "rhi/Mesh.h"
+#include "scene/Scene.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -88,11 +89,10 @@ std::unique_ptr<kazu::SyncObjects> g_syncObjects;
 uint32_t currentFrame = 0;
 bool g_framebufferResized = false;
 
-std::unique_ptr<kazu::Mesh> g_mesh;
 std::unique_ptr<kazu::DescriptorSetLayoutCache> g_descriptorSetLayoutCache;
 VkDescriptorSetLayout g_descriptorSetLayout = VK_NULL_HANDLE;  // from DescriptorSetLayoutCache
-std::unique_ptr<kazu::Texture> g_texture;
-std::unique_ptr<kazu::Material> g_material;
+std::unique_ptr<kazu::Scene> g_scene;
+int g_displayMode = 0;  // 0 = color, 1 = depth
 
 // ============================================================================
 // Section 2: Utility Functions
@@ -105,6 +105,13 @@ std::unique_ptr<kazu::Material> g_material;
 // ============================================================================
 // Section 9: RenderPass & Pipeline
 // ============================================================================
+
+void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_D && action == GLFW_PRESS) {
+        g_displayMode = (g_displayMode + 1) % 2;
+        spdlog::info("Display mode switched to: {}", g_displayMode == 0 ? "color" : "depth");
+    }
+}
 
 void createRenderPass() {
     VkAttachmentDescription colorAttachment{};
@@ -121,23 +128,39 @@ void createRenderPass() {
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = VK_FORMAT_D32_SFLOAT;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthAttachmentRef{};
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
+    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
@@ -171,15 +194,6 @@ void createCommandPoolAndBuffers() {
     }
 }
 
-void createTextureAndMaterial() {
-    g_texture = std::make_unique<kazu::Texture>(*g_ctx, "container.png");
-
-    g_material = std::make_unique<kazu::Material>(*g_ctx, *g_shaderLibrary, *g_descriptorSetLayoutCache);
-    g_material->setShaders("shaders/triangle.vert.spv", "shaders/triangle.frag.spv");
-    g_material->setTexture(0, *g_texture);  // binding 0 = texSampler
-    g_material->build();
-}
-
 void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -188,9 +202,11 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     renderPassInfo.renderArea.offset = { 0, 0 };
     renderPassInfo.renderArea.extent = g_swapchain->extent();
 
-    VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearColor;
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    clearValues[1].depthStencil = {1.0f, 0};
+    renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassInfo.pClearValues = clearValues.data();
 
     vkCmdBeginRenderPass(cmd, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_graphicsPipeline->handle());
@@ -210,19 +226,29 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     scissor.extent = g_swapchain->extent();
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Push MVP matrix
-    glm::mat4 model = glm::scale(glm::mat4(1.0f), glm::vec3(0.5f));
-    glm::mat4 view = glm::lookAt(glm::vec3(0.0f, 1.0f, 3.0f), glm::vec3(0.0f, 0.8f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+    // Compute view/proj from scene camera config
+    const auto& cfg = g_scene->config();
+    glm::mat4 view = glm::lookAt(cfg.cameraEye, cfg.cameraTarget, cfg.cameraUp);
     float aspect = static_cast<float>(g_swapchain->extent().width) / g_swapchain->extent().height;
     glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
     proj[1][1] *= -1.0f; // Vulkan Y-flip
-    glm::mat4 mvp = proj * view * model;
-    vkCmdPushConstants(cmd, g_pipelineLayout->handle(), VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::mat4), &mvp[0][0]);
+    glm::mat4 mvp = proj * view;
 
-    VkDescriptorSet materialDS = g_material->descriptorSet();
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout->handle(),
-                            0, 1, &materialDS, 0, nullptr);
-    g_mesh->draw(cmd);
+    // Push constants: mat4(64) + vec4(16) + vec4(16) + int(4) + pad(12) = 112 bytes
+    struct PushData {
+        glm::mat4 mvp;
+        glm::vec4 lightPos;
+        glm::vec4 viewPos;
+        int displayMode;
+        int _pad[3];
+    } push;
+    push.mvp = mvp;
+    push.lightPos = glm::vec4(cfg.lightPos, 0.0f);
+    push.viewPos = glm::vec4(cfg.cameraEye, 0.0f);
+    push.displayMode = g_displayMode;
+    vkCmdPushConstants(cmd, g_pipelineLayout->handle(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData), &push);
+
+    g_scene->draw(cmd, g_pipelineLayout->handle());
     vkCmdEndRenderPass(cmd);
 }
 
@@ -323,11 +349,11 @@ void initVulkan() {
         spdlog::info("[DescriptorSetLayoutCache] Verified: duplicate bindings return same handle");
     }
 
-    g_mesh = std::make_unique<kazu::Mesh>(kazu::Mesh::loadObj(*g_ctx,
-        "D:/code/projects/CudaRayTracer/Model/Characters/Marry/Marry.obj"));
     createCommandPoolAndBuffers();
     createSyncObjects();
-    createTextureAndMaterial();
+
+    g_scene = std::make_unique<kazu::Scene>();
+    g_scene->loadFromFile(*g_ctx, *g_shaderLibrary, *g_descriptorSetLayoutCache, "scene.json");
 }
 
 void cleanup() {
@@ -340,9 +366,7 @@ void cleanup() {
     g_commandBuffers.clear();
     g_commandPool.reset();
 
-    g_material.reset();
-    g_texture.reset();
-    g_mesh.reset();
+    g_scene.reset();
 
     g_graphicsPipeline = nullptr;            // owned by PipelineCache
     g_shaderLibrary.reset();
@@ -371,6 +395,7 @@ int main() {
     if (!window) {
         kazu::fatalError("Failed to create GLFW window!");
     }
+    glfwSetKeyCallback(window, keyCallback);
 
     try {
         initVulkan();

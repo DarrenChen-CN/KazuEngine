@@ -20,6 +20,7 @@ Swapchain::Swapchain(Context& ctx, GLFWwindow* window, VkRenderPass renderPass)
     createSurface();
     createSwapchain();
     createImageViews();
+    createDepthResources();
     if (renderPass != VK_NULL_HANDLE) {
         createFramebuffers(renderPass);
     }
@@ -43,9 +44,16 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
     , m_framebuffers(std::move(other.m_framebuffers))
     , m_format(other.m_format)
     , m_extent(other.m_extent)
+    , m_depthFormat(other.m_depthFormat)
+    , m_depthImage(other.m_depthImage)
+    , m_depthAllocation(other.m_depthAllocation)
+    , m_depthImageView(other.m_depthImageView)
 {
     other.m_surface = VK_NULL_HANDLE;
     other.m_swapchain = VK_NULL_HANDLE;
+    other.m_depthImage = VK_NULL_HANDLE;
+    other.m_depthAllocation = VK_NULL_HANDLE;
+    other.m_depthImageView = VK_NULL_HANDLE;
 }
 
 Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
@@ -61,9 +69,16 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
         m_framebuffers = std::move(other.m_framebuffers);
         m_format = other.m_format;
         m_extent = other.m_extent;
+        m_depthFormat = other.m_depthFormat;
+        m_depthImage = other.m_depthImage;
+        m_depthAllocation = other.m_depthAllocation;
+        m_depthImageView = other.m_depthImageView;
 
         other.m_surface = VK_NULL_HANDLE;
         other.m_swapchain = VK_NULL_HANDLE;
+        other.m_depthImage = VK_NULL_HANDLE;
+        other.m_depthAllocation = VK_NULL_HANDLE;
+        other.m_depthImageView = VK_NULL_HANDLE;
     }
     return *this;
 }
@@ -147,6 +162,51 @@ void Swapchain::createImageViews() {
     }
 }
 
+void Swapchain::createDepthResources() {
+    if (m_depthImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_ctx->device(), m_depthImageView, nullptr);
+        m_depthImageView = VK_NULL_HANDLE;
+    }
+    if (m_depthImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_ctx->allocator(), m_depthImage, m_depthAllocation);
+        m_depthImage = VK_NULL_HANDLE;
+        m_depthAllocation = VK_NULL_HANDLE;
+    }
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = m_extent.width;
+    imageInfo.extent.height = m_extent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = m_depthFormat;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo allocInfo{};
+    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+    VK_CHECK(vmaCreateImage(m_ctx->allocator(), &imageInfo, &allocInfo, &m_depthImage, &m_depthAllocation, nullptr));
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_depthImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = m_depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    VK_CHECK(vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_depthImageView));
+}
+
 void Swapchain::createFramebuffers(VkRenderPass renderPass) {
     // Clean up old framebuffers if any
     for (auto framebuffer : m_framebuffers) {
@@ -156,12 +216,12 @@ void Swapchain::createFramebuffers(VkRenderPass renderPass) {
 
     m_framebuffers.resize(m_imageViews.size());
     for (size_t i = 0; i < m_imageViews.size(); ++i) {
-        VkImageView attachments[] = { m_imageViews[i] };
+        VkImageView attachments[] = { m_imageViews[i], m_depthImageView };
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         framebufferInfo.renderPass = renderPass;
-        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.attachmentCount = 2;
         framebufferInfo.pAttachments = attachments;
         framebufferInfo.width = m_extent.width;
         framebufferInfo.height = m_extent.height;
@@ -178,6 +238,16 @@ void Swapchain::cleanup() {
         vkDestroyFramebuffer(m_ctx->device(), framebuffer, nullptr);
     }
     m_framebuffers.clear();
+
+    if (m_depthImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(m_ctx->device(), m_depthImageView, nullptr);
+        m_depthImageView = VK_NULL_HANDLE;
+    }
+    if (m_depthImage != VK_NULL_HANDLE) {
+        vmaDestroyImage(m_ctx->allocator(), m_depthImage, m_depthAllocation);
+        m_depthImage = VK_NULL_HANDLE;
+        m_depthAllocation = VK_NULL_HANDLE;
+    }
 
     for (auto imageView : m_imageViews) {
         vkDestroyImageView(m_ctx->device(), imageView, nullptr);
@@ -222,6 +292,7 @@ void Swapchain::recreate(VkRenderPass renderPass) {
 
     createSwapchain();
     createImageViews();
+    createDepthResources();
     createFramebuffers(renderPass);
     spdlog::info("Swapchain recreated: {}x{}", m_extent.width, m_extent.height);
 }
@@ -305,3 +376,5 @@ VkExtent2D Swapchain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& caps) {
 }
 
 } // namespace kazu
+
+
