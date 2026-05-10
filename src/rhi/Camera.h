@@ -23,6 +23,10 @@ public:
     // Orbit around target: deltaYaw/deltaPitch in radians
     void orbit(float deltaYaw, float deltaPitch);
 
+    // Pan: move camera and target along view plane
+    // dx = rightward movement, dy = downward movement (screen space)
+    void pan(float dx, float dy);
+
     // Zoom: positive = move closer, negative = move away
     void zoom(float delta);
 

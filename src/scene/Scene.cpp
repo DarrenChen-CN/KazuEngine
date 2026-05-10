@@ -3,6 +3,7 @@
 // ============================================================================
 
 #include "Scene.h"
+#include "../core/Path.h"
 #include "../core/Utils.h"
 #include <nlohmann/json.hpp>
 #include <fastgltf/core.hpp>
@@ -97,7 +98,9 @@ void Scene::loadObjModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLa
     ModelInstance instance;
     instance.mesh = std::move(mesh);
     instance.material = std::make_unique<Material>(ctx, shaderLib, dslCache);
-    instance.material->setShaders("shaders/triangle.vert.spv", "shaders/triangle.frag.spv");
+    instance.material->setShaders(
+        kazu::Path::resolveShader("triangle.vert.spv"),
+        kazu::Path::resolveShader("triangle.frag.spv"));
 
     if (!texturePath.empty()) {
         instance.texture = std::make_unique<Texture>(ctx, texturePath);
@@ -215,7 +218,9 @@ void Scene::loadGltfModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetL
             ModelInstance instance;
             instance.mesh = std::move(meshObj);
             instance.material = std::make_unique<Material>(ctx, shaderLib, dslCache);
-            instance.material->setShaders("shaders/triangle.vert.spv", "shaders/triangle.frag.spv");
+            instance.material->setShaders(
+                kazu::Path::resolveShader("triangle.vert.spv"),
+                kazu::Path::resolveShader("triangle.frag.spv"));
             if (texture) {
                 instance.texture = std::move(texture);
                 instance.material->setTexture(0, *instance.texture);

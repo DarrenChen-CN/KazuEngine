@@ -19,7 +19,7 @@ GraphicsPipeline* PipelineCache::find(const PipelineState& state) const {
 }
 
 void PipelineCache::insert(const PipelineState& state, std::unique_ptr<GraphicsPipeline> pipeline) {
-    spdlog::info("[PipelineCache] Miss → create new pipeline (cache size: {} → {})",
+    spdlog::info("[PipelineCache] Miss -> create new pipeline (cache size: {} -> {})",
                  m_cache.size(), m_cache.size() + 1);
     m_cache[state] = std::move(pipeline);
 }

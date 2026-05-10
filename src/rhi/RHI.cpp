@@ -3,6 +3,7 @@
 // ============================================================================
 
 #include "RHI.h"
+#include "../core/Path.h"
 #include "../core/Context.h"
 #include "../core/Swapchain.h"
 #include "../core/RenderPass.h"
@@ -133,8 +134,8 @@ void RHI::createRenderPass() {
 
 void RHI::createGraphicsPipeline() {
     PipelineBuilder builder(*m_ctx, *m_shaderLibrary, *m_descriptorSetLayoutCache);
-    builder.shader("shaders/triangle.vert.spv")
-           .shader("shaders/triangle.frag.spv")
+    builder.shader(Path::resolveShader("triangle.vert.spv"))
+           .shader(Path::resolveShader("triangle.frag.spv"))
            .renderPass(m_renderPass->handle())
            .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
     auto result = builder.build(*m_pipelineCache);

@@ -32,11 +32,13 @@ std::unique_ptr<kazu::Camera> g_camera;
 int g_displayMode = 0;  // 0 = color, 1 = depth
 
 // Mouse input
-bool g_mouseDragging = false;
+// -1 = none, 0 = left (orbit), 1 = right (pan)
+int g_dragButton = -1;
 double g_lastMouseX = 0.0;
 double g_lastMouseY = 0.0;
 const float MOUSE_SENSITIVITY = 0.005f;
 const float ZOOM_SENSITIVITY = 0.5f;
+const float PAN_SENSITIVITY = 2.0f;
 
 // ============================================================================
 // Input callbacks
@@ -50,27 +52,35 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 }
 
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
-    if (button == GLFW_MOUSE_BUTTON_LEFT) {
-        if (action == GLFW_PRESS) {
-            g_mouseDragging = true;
-            glfwGetCursorPos(window, &g_lastMouseX, &g_lastMouseY);
-        } else if (action == GLFW_RELEASE) {
-            g_mouseDragging = false;
-        }
+    if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        g_dragButton = 0;
+        glfwGetCursorPos(window, &g_lastMouseX, &g_lastMouseY);
+    } else if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE) {
+        if (g_dragButton == 0) g_dragButton = -1;
+    } else if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
+        g_dragButton = 1;
+        glfwGetCursorPos(window, &g_lastMouseX, &g_lastMouseY);
+    } else if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_RELEASE) {
+        if (g_dragButton == 1) g_dragButton = -1;
     }
 }
 
 void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
-    if (!g_mouseDragging || !g_camera) return;
+    if (g_dragButton == -1 || !g_camera) return;
     double dx = xpos - g_lastMouseX;
     double dy = ypos - g_lastMouseY;
     g_lastMouseX = xpos;
     g_lastMouseY = ypos;
 
-    // GLFW: Y increases downward.
-    // Orbit intuition: mouse down = look down, mouse up = look up.
-    g_camera->orbit(static_cast<float>(-dx) * MOUSE_SENSITIVITY,
-                    static_cast<float>(dy) * MOUSE_SENSITIVITY);
+    if (g_dragButton == 0) {
+        // Left drag: orbit
+        g_camera->orbit(static_cast<float>(-dx) * MOUSE_SENSITIVITY,
+                        static_cast<float>(dy) * MOUSE_SENSITIVITY);
+    } else if (g_dragButton == 1) {
+        // Right drag: pan
+        g_camera->pan(static_cast<float>(dx) * MOUSE_SENSITIVITY * PAN_SENSITIVITY,
+                      static_cast<float>(dy) * MOUSE_SENSITIVITY * PAN_SENSITIVITY);
+    }
 }
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
