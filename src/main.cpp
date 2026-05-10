@@ -167,6 +167,9 @@ void initApp() {
 }
 
 void cleanupApp() {
+    if (g_rhi) {
+        vkDeviceWaitIdle(g_rhi->ctx().device());
+    }
     g_camera.reset();
     g_scene.reset();
     g_rhi.reset();
