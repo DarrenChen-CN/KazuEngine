@@ -33,6 +33,7 @@
 #include "rhi/Texture.h"
 #include "rhi/Material.h"
 #include "rhi/Mesh.h"
+#include "rhi/Camera.h"
 #include "scene/Scene.h"
 
 #include <glm/glm.hpp>
@@ -92,7 +93,15 @@ bool g_framebufferResized = false;
 std::unique_ptr<kazu::DescriptorSetLayoutCache> g_descriptorSetLayoutCache;
 VkDescriptorSetLayout g_descriptorSetLayout = VK_NULL_HANDLE;  // from DescriptorSetLayoutCache
 std::unique_ptr<kazu::Scene> g_scene;
+std::unique_ptr<kazu::Camera> g_camera;
 int g_displayMode = 0;  // 0 = color, 1 = depth
+
+// Mouse input state for orbit camera
+bool g_mouseDragging = false;
+double g_lastMouseX = 0.0;
+double g_lastMouseY = 0.0;
+const float MOUSE_SENSITIVITY = 0.005f;
+const float ZOOM_SENSITIVITY = 0.5f;
 
 // ============================================================================
 // Section 2: Utility Functions
@@ -110,6 +119,33 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
     if (key == GLFW_KEY_D && action == GLFW_PRESS) {
         g_displayMode = (g_displayMode + 1) % 2;
         spdlog::info("Display mode switched to: {}", g_displayMode == 0 ? "color" : "depth");
+    }
+}
+
+void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        if (action == GLFW_PRESS) {
+            g_mouseDragging = true;
+            glfwGetCursorPos(window, &g_lastMouseX, &g_lastMouseY);
+        } else if (action == GLFW_RELEASE) {
+            g_mouseDragging = false;
+        }
+    }
+}
+
+void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
+    if (!g_mouseDragging || !g_camera) return;
+    double dx = xpos - g_lastMouseX;
+    double dy = ypos - g_lastMouseY;
+    g_lastMouseX = xpos;
+    g_lastMouseY = ypos;
+    g_camera->orbit(static_cast<float>(-dx) * MOUSE_SENSITIVITY,
+                    static_cast<float>(-dy) * MOUSE_SENSITIVITY);
+}
+
+void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    if (g_camera) {
+        g_camera->zoom(static_cast<float>(yoffset) * ZOOM_SENSITIVITY);
     }
 }
 
@@ -227,12 +263,10 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
     scissor.extent = g_swapchain->extent();
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // Compute view/proj from scene camera config
-    const auto& cfg = g_scene->config();
-    glm::mat4 view = glm::lookAt(cfg.cameraEye, cfg.cameraTarget, cfg.cameraUp);
+    // Compute view/proj from Camera
     float aspect = static_cast<float>(g_swapchain->extent().width) / g_swapchain->extent().height;
-    glm::mat4 proj = glm::perspective(glm::radians(45.0f), aspect, 0.1f, 100.0f);
-    proj[1][1] *= -1.0f; // Vulkan Y-flip
+    glm::mat4 view = g_camera->getViewMatrix();
+    glm::mat4 proj = g_camera->getProjectionMatrix(aspect);
     glm::mat4 mvp = proj * view;
 
     // Push constants: mat4(64) + vec4(16) + vec4(16) + int(4) + pad(12) = 112 bytes
@@ -243,9 +277,10 @@ void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex) {
         int displayMode;
         int _pad[3];
     } push;
+    const auto& cfg = g_scene->config();
     push.mvp = mvp;
     push.lightPos = glm::vec4(cfg.lightPos, 0.0f);
-    push.viewPos = glm::vec4(cfg.cameraEye, 0.0f);
+    push.viewPos = glm::vec4(g_camera->position(), 0.0f);
     push.displayMode = g_displayMode;
     vkCmdPushConstants(cmd, g_pipelineLayout->handle(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushData), &push);
 
@@ -355,6 +390,13 @@ void initVulkan() {
 
     g_scene = std::make_unique<kazu::Scene>();
     g_scene->loadFromFile(*g_ctx, *g_shaderLibrary, *g_descriptorSetLayoutCache, "assets/scenes/sample-scene.json");
+
+    // Initialize camera from scene config
+    const auto& cfg = g_scene->config();
+    g_camera = std::make_unique<kazu::Camera>();
+    g_camera->setPosition(cfg.cameraEye);
+    g_camera->setTarget(cfg.cameraTarget);
+    g_camera->setUp(cfg.cameraUp);
 }
 
 void cleanup() {
@@ -397,6 +439,9 @@ int main() {
         kazu::fatalError("Failed to create GLFW window!");
     }
     glfwSetKeyCallback(window, keyCallback);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetCursorPosCallback(window, cursorPosCallback);
+    glfwSetScrollCallback(window, scrollCallback);
 
     try {
         initVulkan();
