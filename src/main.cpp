@@ -353,7 +353,7 @@ void initVulkan() {
     createSyncObjects();
 
     g_scene = std::make_unique<kazu::Scene>();
-    g_scene->loadFromFile(*g_ctx, *g_shaderLibrary, *g_descriptorSetLayoutCache, "scene.json");
+    g_scene->loadFromFile(*g_ctx, *g_shaderLibrary, *g_descriptorSetLayoutCache, "assets/scenes/sample-scene.json");
 }
 
 void cleanup() {

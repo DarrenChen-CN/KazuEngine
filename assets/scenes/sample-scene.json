@@ -1,0 +1,17 @@
+{
+    "camera": {
+        "eye": [0.0, 1.4, -4.5],
+        "target": [0.0, 0.9, 0.0],
+        "up": [0.0, 1.0, 0.0]
+    },
+    "light": {
+        "position": [2.0, 3.0, 2.0]
+    },
+    "models": [
+        {
+            "path": "assets/models/Marry/Marry.obj",
+            "format": "obj",
+            "scale": 0.5
+        }
+    ]
+}

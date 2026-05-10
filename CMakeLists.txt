@@ -55,6 +55,31 @@ if(NOT glm_POPULATED)
     FetchContent_Populate(glm)
 endif()
 
+# nlohmann/json (JSON parser, header-only)
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/json
+    BINARY_DIR     ${CMAKE_BINARY_DIR}/json-build
+    SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/json-subbuild
+)
+FetchContent_GetProperties(json)
+if(NOT json_POPULATED)
+    FetchContent_Populate(json)
+endif()
+
+# fastgltf (GLTF/GLB loader)
+FetchContent_Declare(
+    fastgltf
+    GIT_REPOSITORY https://github.com/spnda/fastgltf.git
+    GIT_TAG        main
+    SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/fastgltf
+    BINARY_DIR     ${CMAKE_BINARY_DIR}/fastgltf-build
+    SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/fastgltf-subbuild
+)
+FetchContent_MakeAvailable(fastgltf)
+
 # SPIRV-Reflect (for shader reflection)
 FetchContent_Declare(
     spirv-reflect
@@ -77,11 +102,13 @@ target_link_libraries(KazuEngine PRIVATE
     Vulkan::Vulkan
     glfw
     spdlog::spdlog
+    fastgltf
 )
 
 target_include_directories(KazuEngine PRIVATE
     ${vma_SOURCE_DIR}/include
     ${glm_SOURCE_DIR}
+    ${json_SOURCE_DIR}/single_include
     ${spirv-reflect_SOURCE_DIR}
     ${spirv-reflect_SOURCE_DIR}/include
 )
@@ -130,8 +157,8 @@ add_custom_command(TARGET KazuEngine POST_BUILD
     ${SHADER_BINARY_DIR} $<TARGET_FILE_DIR:KazuEngine>/shaders
 )
 
-# Copy texture to build dir
+# Copy assets to build dir
 add_custom_command(TARGET KazuEngine POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "D:/code/projects/LearnOpenGL/image/container.png" $<TARGET_FILE_DIR:KazuEngine>/container.png
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/assets $<TARGET_FILE_DIR:KazuEngine>/assets
 )
