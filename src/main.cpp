@@ -139,8 +139,12 @@ void cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
     double dy = ypos - g_lastMouseY;
     g_lastMouseX = xpos;
     g_lastMouseY = ypos;
+
+    // GLFW: Y increases downward.
+    // Orbit intuition: mouse down = look down, mouse up = look up.
+    // So dx is inverted (left drag = CCW), dy is passed as-is.
     g_camera->orbit(static_cast<float>(-dx) * MOUSE_SENSITIVITY,
-                    static_cast<float>(-dy) * MOUSE_SENSITIVITY);
+                    static_cast<float>(dy) * MOUSE_SENSITIVITY);
 }
 
 void scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
