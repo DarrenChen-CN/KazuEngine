@@ -173,7 +173,8 @@ void createGraphicsPipeline() {
     kazu::PipelineBuilder builder(*g_ctx, *g_shaderLibrary, *g_descriptorSetLayoutCache);
     builder.shader("shaders/triangle.vert.spv")
            .shader("shaders/triangle.frag.spv")
-           .renderPass(g_renderPass->handle());
+           .renderPass(g_renderPass->handle())
+           .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
     auto result = builder.build(*g_pipelineCache);
 
     g_graphicsPipeline = result.pipeline;
