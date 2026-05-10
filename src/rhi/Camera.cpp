@@ -33,9 +33,10 @@ void Camera::pan(float dx, float dy) {
     glm::vec3 right = glm::normalize(glm::cross(m_target - m_position, m_up));
     glm::vec3 up = glm::normalize(m_up);
 
-    // dx > 0: mouse dragged right -> camera moves right
-    // dy > 0: mouse dragged down (GLFW Y+) -> camera moves down (world Y-)
-    glm::vec3 delta = right * dx - up * dy;
+    // Grab behavior: dragging the view, not the camera.
+    // Mouse right drag -> view moves right -> camera moves left.
+    // Mouse down drag  -> view moves down  -> camera moves up.
+    glm::vec3 delta = -right * dx + up * dy;
     m_position += delta;
     m_target += delta;
 }
