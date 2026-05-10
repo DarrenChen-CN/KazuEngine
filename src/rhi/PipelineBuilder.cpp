@@ -264,6 +264,7 @@ PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     depthStencil.depthTestEnable = VK_TRUE;
     depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    // depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // Allow equal for skybox
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 

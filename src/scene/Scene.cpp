@@ -41,6 +41,10 @@ void Scene::loadFromFile(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLa
     auto lpos = light.value("position", std::vector<float>{2.0f, 3.0f, 2.0f});
     m_config.lightPos = glm::vec3(lpos[0], lpos[1], lpos[2]);
 
+    spdlog::info("[Scene] Camera Eye: ({:.1f}, {:.1f}, {:.1f})", m_config.cameraEye.x, m_config.cameraEye.y, m_config.cameraEye.z);
+    spdlog::info("[Scene] Light Position: ({:.1f}, {:.1f}, {:.1f})", m_config.lightPos.x, m_config.lightPos.y, m_config.lightPos.z);
+    spdlog::info("[Scene] Loading models...");
+
     // Parse models
     for (const auto& model : j.value("models", json::array())) {
         std::string path = model.value("path", "");

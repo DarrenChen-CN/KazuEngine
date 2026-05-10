@@ -49,3 +49,7 @@ docs/
 /external/glm/
 /external/glm-src/
 /external/glm-build/
+/external/fastgltf/
+/external/fastgltf-build/
+/external/json/
+/external/json-build/

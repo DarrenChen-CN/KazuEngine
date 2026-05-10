@@ -26,7 +26,10 @@ void main() {
         return;
     }
 
-    vec3 albedo = texture(texSampler, fragTexCoord).rgb;
+    // Vulkan texture origin is top-left; OBJ UV is bottom-left (OpenGL style).
+    // Flip V to match.
+    vec2 uv = vec2(fragTexCoord.x, 1.0 - fragTexCoord.y);
+    vec3 albedo = texture(texSampler, uv).rgb;
 
     vec3 N = normalize(fragNormal);
     vec3 L = normalize(pc.lightPos.xyz - fragWorldPos);
