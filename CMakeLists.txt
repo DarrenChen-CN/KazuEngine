@@ -106,6 +106,7 @@ target_link_libraries(KazuEngine PRIVATE
 )
 
 target_include_directories(KazuEngine PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
     ${vma_SOURCE_DIR}/include
     ${glm_SOURCE_DIR}
     ${json_SOURCE_DIR}/single_include
