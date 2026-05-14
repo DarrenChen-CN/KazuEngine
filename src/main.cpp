@@ -13,6 +13,7 @@
 #include "rhi/RHI.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
+#include "rendergraph/RenderGraph.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -174,6 +175,40 @@ void initApp() {
     g_camera->setPosition(cfg.cameraEye);
     g_camera->setTarget(cfg.cameraTarget);
     g_camera->setUp(cfg.cameraUp);
+
+    // --- Week 4.2 Transient Resource allocation smoke test ---
+    {
+        kazu::RenderGraph rg(g_rhi->ctx());
+        auto color = rg.addTexture("GBufferColor",
+            {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_R8G8B8A8_UNORM,
+             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+        auto depth = rg.addTexture("GBufferDepth",
+            {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_D32_SFLOAT,
+             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT});
+        auto unused = rg.addTexture("Unused",
+            {128, 128, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT});
+
+        rg.addPass("GBuffer", [&](kazu::RenderGraph::PassBuilder& b) {
+            b.writeColor(0, color);
+            b.writeDepth(depth);
+            b.execute = [](VkCommandBuffer) {};
+        });
+        rg.addPass("Lighting", [&](kazu::RenderGraph::PassBuilder& b) {
+            b.read(color);
+            b.read(depth);
+            b.execute = [](VkCommandBuffer) {};
+        });
+
+        if (!rg.compile()) {
+            spdlog::error("RenderGraph compile failed!");
+        } else {
+            assert(rg.getImageView(color) != VK_NULL_HANDLE);
+            assert(rg.getImageView(depth) != VK_NULL_HANDLE);
+            assert(rg.getImageView(unused) == VK_NULL_HANDLE);
+            spdlog::info("RenderGraph 4.2 transient allocation test passed.");
+        }
+    }
+    // ---
 }
 
 void cleanupApp() {
