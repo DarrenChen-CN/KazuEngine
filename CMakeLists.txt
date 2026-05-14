@@ -136,6 +136,8 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/triangle.vert
     ${SHADER_SOURCE_DIR}/triangle.frag
     ${SHADER_SOURCE_DIR}/gbuffer.frag
+    ${SHADER_SOURCE_DIR}/lighting.vert
+    ${SHADER_SOURCE_DIR}/lighting.frag
 )
 
 foreach(SHADER ${SHADERS})

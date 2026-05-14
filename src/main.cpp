@@ -16,6 +16,10 @@
 #include "rhi/PipelineCache.h"
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
+#include "core/Image.h"
+#include "core/DescriptorPool.h"
+#include "core/DescriptorSetLayout.h"
+#include "core/Sampler.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -32,7 +36,28 @@ GLFWwindow* g_window = nullptr;
 std::unique_ptr<kazu::RHI> g_rhi;
 std::unique_ptr<kazu::Scene> g_scene;
 std::unique_ptr<kazu::Camera> g_camera;
-int g_displayMode = 0;  // 0 = color, 1 = depth
+int g_displayMode = 0;  // 0 = lighting, 1 = albedo, 2 = normal
+
+// GBuffer resources
+std::unique_ptr<kazu::Image> g_gbufferAlbedo;
+std::unique_ptr<kazu::Image> g_gbufferNormal;
+std::unique_ptr<kazu::Image> g_gbufferMaterial;
+std::unique_ptr<kazu::Image> g_gbufferDepth;
+VkRenderPass   g_gbufferRenderPass   = VK_NULL_HANDLE;
+VkFramebuffer  g_gbufferFramebuffer  = VK_NULL_HANDLE;
+VkPipeline     g_gbufferPipeline     = VK_NULL_HANDLE;
+VkPipelineLayout g_gbufferPipelineLayout = VK_NULL_HANDLE;
+
+// Lighting resources
+VkPipeline     g_lightingPipeline     = VK_NULL_HANDLE;
+VkPipelineLayout g_lightingPipelineLayout = VK_NULL_HANDLE;
+VkDescriptorSetLayout g_lightingDescriptorSetLayout = VK_NULL_HANDLE;
+VkDescriptorSet  g_lightingDescriptorSet = VK_NULL_HANDLE;
+VkDescriptorPool g_lightingDescriptorPool = VK_NULL_HANDLE;
+VkSampler        g_lightingSampler = VK_NULL_HANDLE;
+
+// RenderGraph
+std::unique_ptr<kazu::RenderGraph> g_renderGraph;
 
 // Mouse input
 // -1 = none, 0 = left (orbit), 1 = right (pan)
@@ -100,7 +125,10 @@ void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
 // Frame rendering
 // ============================================================================
 
-struct PushData {
+// Current frame's swapchain image index, used by Lighting Pass execute lambda
+uint32_t g_currentImageIndex = 0;
+
+struct GBufferPush {
     glm::mat4 mvp;
     glm::vec4 lightPos;
     glm::vec4 viewPos;
@@ -108,56 +136,16 @@ struct PushData {
     int _pad[3];
 };
 
+struct LightingPush {
+    glm::vec4 lightPos;
+    glm::vec4 viewPos;
+    int displayMode;
+};
+
 void recordFrame(uint32_t imageIndex) {
     VkCommandBuffer cmd = g_rhi->currentCmd();
-
-    // Begin render pass
-    VkRenderPassBeginInfo rpInfo{};
-    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpInfo.renderPass = g_rhi->renderPass();
-    rpInfo.framebuffer = g_rhi->framebuffer(imageIndex);
-    rpInfo.renderArea.offset = {0, 0};
-    rpInfo.renderArea.extent = g_rhi->extent();
-
-    std::array<VkClearValue, 2> clearValues{};
-    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clearValues[1].depthStencil = {1.0f, 0};
-    rpInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-    rpInfo.pClearValues = clearValues.data();
-
-    vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_rhi->graphicsPipeline());
-
-    // Dynamic viewport & scissor
-    VkViewport viewport{};
-    viewport.x = 0.0f;
-    viewport.y = 0.0f;
-    viewport.width = static_cast<float>(g_rhi->extent().width);
-    viewport.height = static_cast<float>(g_rhi->extent().height);
-    viewport.minDepth = 0.0f;
-    viewport.maxDepth = 1.0f;
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
-
-    VkRect2D scissor{};
-    scissor.offset = {0, 0};
-    scissor.extent = g_rhi->extent();
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-    // Push constants
-    PushData push{};
-    glm::mat4 view = g_camera->getViewMatrix();
-    glm::mat4 proj = g_camera->getProjectionMatrix(g_rhi->aspect());
-    push.mvp = proj * view;
-    push.lightPos = glm::vec4(g_scene->config().lightPos, 0.0f);
-    push.viewPos = glm::vec4(g_camera->position(), 0.0f);
-    push.displayMode = g_displayMode;
-
-    vkCmdPushConstants(cmd, g_rhi->pipelineLayout(),
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        0, sizeof(PushData), &push);
-
-    g_scene->draw(cmd, g_rhi->pipelineLayout());
-    vkCmdEndRenderPass(cmd);
+    g_currentImageIndex = imageIndex;
+    g_renderGraph->execute(cmd);
 }
 
 // ============================================================================
@@ -178,64 +166,143 @@ void initApp() {
     g_camera->setTarget(cfg.cameraTarget);
     g_camera->setUp(cfg.cameraUp);
 
-    // --- Week 4.2 Transient Resource allocation smoke test ---
-    {
-        kazu::RenderGraph rg(g_rhi->ctx());
-        auto color = rg.addTexture("GBufferColor",
-            {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_R8G8B8A8_UNORM,
-             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
-        auto depth = rg.addTexture("GBufferDepth",
-            {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_D32_SFLOAT,
-             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT});
-        auto unused = rg.addTexture("Unused",
-            {128, 128, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT});
+    // --- 4.3b Deferred Shading: GBuffer + Lighting ---
+    g_renderGraph = std::make_unique<kazu::RenderGraph>(g_rhi->ctx());
 
-        rg.addPass("GBuffer", [&](kazu::RenderGraph::PassBuilder& b) {
-            b.writeColor(0, color);
-            b.writeDepth(depth);
-            b.execute = [](VkCommandBuffer) {};
-        });
-        rg.addPass("Lighting", [&](kazu::RenderGraph::PassBuilder& b) {
-            b.read(color);
-            b.read(depth);
-            b.execute = [](VkCommandBuffer) {};
-        });
+    auto albedoHandle = g_renderGraph->addTexture("Albedo",
+        {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_R8G8B8A8_UNORM,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+    auto normalHandle = g_renderGraph->addTexture("Normal",
+        {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_R8G8B8A8_UNORM,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+    auto materialHandle = g_renderGraph->addTexture("Material",
+        {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_R8G8B8A8_UNORM,
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+    auto depthHandle = g_renderGraph->addTexture("Depth",
+        {WINDOW_WIDTH, WINDOW_HEIGHT, VK_FORMAT_D32_SFLOAT,
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT});
 
-        if (!rg.compile()) {
-            spdlog::error("RenderGraph compile failed!");
-        } else {
-            assert(rg.getImageView(color) != VK_NULL_HANDLE);
-            assert(rg.getImageView(depth) != VK_NULL_HANDLE);
-            assert(rg.getImageView(unused) == VK_NULL_HANDLE);
-            spdlog::info("RenderGraph 4.2 transient allocation test passed.");
-        }
+    // Passes will be added after compile so execute lambdas can capture handles
+    // For now we add placeholder passes to drive compilation & barrier derivation
+    g_renderGraph->addPass("GBuffer", [&](kazu::RenderGraph::PassBuilder& b) {
+        b.writeColor(0, albedoHandle);
+        b.writeColor(1, normalHandle);
+        b.writeColor(2, materialHandle);
+        b.writeDepth(depthHandle);
+        b.execute = [](VkCommandBuffer cmd) {
+            VkRenderPassBeginInfo rpInfo{};
+            rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rpInfo.renderPass = g_gbufferRenderPass;
+            rpInfo.framebuffer = g_gbufferFramebuffer;
+            rpInfo.renderArea.offset = {0, 0};
+            rpInfo.renderArea.extent = {WINDOW_WIDTH, WINDOW_HEIGHT};
+            std::array<VkClearValue, 4> clears{};
+            clears[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            clears[1].color = {{0.5f, 0.5f, 1.0f, 1.0f}};
+            clears[2].color = {{0.0f, 0.5f, 1.0f, 1.0f}};
+            clears[3].depthStencil = {1.0f, 0};
+            rpInfo.clearValueCount = 4;
+            rpInfo.pClearValues = clears.data();
+            vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_gbufferPipeline);
+
+            VkViewport viewport{};
+            viewport.width = static_cast<float>(WINDOW_WIDTH);
+            viewport.height = static_cast<float>(WINDOW_HEIGHT);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            VkRect2D scissor{};
+            scissor.extent = {WINDOW_WIDTH, WINDOW_HEIGHT};
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            GBufferPush push{};
+            push.mvp = g_camera->getProjectionMatrix(g_rhi->aspect()) * g_camera->getViewMatrix();
+            push.lightPos = glm::vec4(g_scene->config().lightPos, 0.0f);
+            push.viewPos = glm::vec4(g_camera->position(), 0.0f);
+            push.displayMode = 0;
+            vkCmdPushConstants(cmd, g_gbufferPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0, sizeof(GBufferPush), &push);
+
+            g_scene->draw(cmd, g_gbufferPipelineLayout);
+            vkCmdEndRenderPass(cmd);
+        };
+    });
+    g_renderGraph->addPass("Lighting", [&](kazu::RenderGraph::PassBuilder& b) {
+        b.read(albedoHandle);
+        b.read(normalHandle);
+        b.execute = [](VkCommandBuffer cmd) {
+            VkRenderPassBeginInfo rpInfo{};
+            rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            rpInfo.renderPass = g_rhi->renderPass();
+            rpInfo.framebuffer = g_rhi->framebuffer(g_currentImageIndex);
+            rpInfo.renderArea.offset = {0, 0};
+            rpInfo.renderArea.extent = g_rhi->extent();
+            std::array<VkClearValue, 2> clears{};
+            clears[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+            clears[1].depthStencil = {1.0f, 0};
+            rpInfo.clearValueCount = 2;
+            rpInfo.pClearValues = clears.data();
+            vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_lightingPipeline);
+
+            VkViewport viewport{};
+            viewport.width = static_cast<float>(g_rhi->extent().width);
+            viewport.height = static_cast<float>(g_rhi->extent().height);
+            viewport.minDepth = 0.0f;
+            viewport.maxDepth = 1.0f;
+            vkCmdSetViewport(cmd, 0, 1, &viewport);
+            VkRect2D scissor{};
+            scissor.extent = g_rhi->extent();
+            vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                g_lightingPipelineLayout, 0, 1, &g_lightingDescriptorSet, 0, nullptr);
+
+            LightingPush push{};
+            push.lightPos = glm::vec4(g_scene->config().lightPos, 0.0f);
+            push.viewPos = glm::vec4(g_camera->position(), 0.0f);
+            push.displayMode = g_displayMode;
+            vkCmdPushConstants(cmd, g_lightingPipelineLayout,
+                VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(LightingPush), &push);
+
+            vkCmdDraw(cmd, 4, 1, 0, 0);
+            vkCmdEndRenderPass(cmd);
+        };
+    });
+
+    if (!g_renderGraph->compile()) {
+        kazu::fatalError("RenderGraph compile failed");
     }
-    // ---
 
-    // --- 4.3a GBuffer MRT Pipeline smoke test ---
+    // Retrieve allocated transient images
+    VkImageView albedoView   = g_renderGraph->getImageView(albedoHandle);
+    VkImageView normalView   = g_renderGraph->getImageView(normalHandle);
+    VkImageView materialView = g_renderGraph->getImageView(materialHandle);
+    VkImageView depthView    = g_renderGraph->getImageView(depthHandle);
+
+    // ---- GBuffer RenderPass & Framebuffer ----
     {
         VkAttachmentDescription attachments[4]{};
-        // Albedo
-        attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;
-        attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        // Normal
-        attachments[1] = attachments[0];
-        // Material
-        attachments[2] = attachments[0];
-        // Depth
+        for (int i = 0; i < 3; ++i) {
+            attachments[i].format = VK_FORMAT_R8G8B8A8_UNORM;
+            attachments[i].samples = VK_SAMPLE_COUNT_1_BIT;
+            attachments[i].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            attachments[i].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attachments[i].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            attachments[i].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            attachments[i].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            attachments[i].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
         attachments[3].format = VK_FORMAT_D32_SFLOAT;
         attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
         attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         attachments[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachments[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[3].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         attachments[3].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
         VkAttachmentReference colorRefs[3] = {
@@ -257,23 +324,116 @@ void initApp() {
         rpInfo.pAttachments = attachments;
         rpInfo.subpassCount = 1;
         rpInfo.pSubpasses = &subpass;
+        VK_CHECK(vkCreateRenderPass(g_rhi->ctx().device(), &rpInfo, nullptr, &g_gbufferRenderPass));
 
-        VkRenderPass gbufferRP;
-        VK_CHECK(vkCreateRenderPass(g_rhi->ctx().device(), &rpInfo, nullptr, &gbufferRP));
+        VkImageView fbViews[4] = {albedoView, normalView, materialView, depthView};
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = g_gbufferRenderPass;
+        fbInfo.attachmentCount = 4;
+        fbInfo.pAttachments = fbViews;
+        fbInfo.width = WINDOW_WIDTH;
+        fbInfo.height = WINDOW_HEIGHT;
+        fbInfo.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(g_rhi->ctx().device(), &fbInfo, nullptr, &g_gbufferFramebuffer));
+    }
 
-        kazu::PipelineCache tempCache(g_rhi->ctx());
+    // ---- GBuffer Pipeline ----
+    {
+        static kazu::PipelineCache s_gbufferCache(g_rhi->ctx());
         kazu::PipelineBuilder builder(g_rhi->ctx(), g_rhi->shaderLib(), g_rhi->dslCache());
         builder.shader("shaders/gbuffer.frag.spv")
                .shader("shaders/triangle.vert.spv")
-               .renderPass(gbufferRP);
-        auto result = builder.build(tempCache);
-
-        assert(result.pipeline != nullptr);
-        assert(result.layout != nullptr);
-        spdlog::info("GBuffer MRT pipeline test passed");
-
-        vkDestroyRenderPass(g_rhi->ctx().device(), gbufferRP, nullptr);
+               .renderPass(g_gbufferRenderPass);
+        auto result = builder.build(s_gbufferCache);
+        g_gbufferPipeline = result.pipeline->handle();
+        g_gbufferPipelineLayout = result.layout->handle();
+        (void)result.layout.release();
     }
+
+    // ---- Lighting Pipeline ----
+    {
+        static kazu::PipelineCache s_lightingCache(g_rhi->ctx());
+        kazu::PipelineBuilder builder(g_rhi->ctx(), g_rhi->shaderLib(), g_rhi->dslCache());
+        builder.shader("shaders/lighting.frag.spv")
+               .shader("shaders/lighting.vert.spv")
+               .renderPass(g_rhi->renderPass());
+        auto result = builder.build(s_lightingCache);
+        g_lightingPipeline = result.pipeline->handle();
+        g_lightingPipelineLayout = result.layout->handle();
+        (void)result.layout.release();
+    }
+
+    // ---- Lighting Descriptor Set (Albedo + Normal samplers) ----
+    {
+        VkSamplerCreateInfo samplerInfo{};
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        VK_CHECK(vkCreateSampler(g_rhi->ctx().device(), &samplerInfo, nullptr, &g_lightingSampler));
+
+        VkDescriptorSetLayoutBinding bindings[2]{};
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[0].pImmutableSamplers = nullptr;
+        bindings[1].binding = 1;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[1].pImmutableSamplers = nullptr;
+
+        VkDescriptorSetLayoutCreateInfo dslInfo{};
+        dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        dslInfo.bindingCount = 2;
+        dslInfo.pBindings = bindings;
+        VK_CHECK(vkCreateDescriptorSetLayout(g_rhi->ctx().device(), &dslInfo, nullptr, &g_lightingDescriptorSetLayout));
+
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSize.descriptorCount = 2;
+        VkDescriptorPoolCreateInfo poolInfo{};
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.maxSets = 1;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        VK_CHECK(vkCreateDescriptorPool(g_rhi->ctx().device(), &poolInfo, nullptr, &g_lightingDescriptorPool));
+
+        VkDescriptorSetAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorPool = g_lightingDescriptorPool;
+        allocInfo.descriptorSetCount = 1;
+        allocInfo.pSetLayouts = &g_lightingDescriptorSetLayout;
+        VK_CHECK(vkAllocateDescriptorSets(g_rhi->ctx().device(), &allocInfo, &g_lightingDescriptorSet));
+
+        VkDescriptorImageInfo imageInfos[2]{};
+        imageInfos[0].sampler = g_lightingSampler;
+        imageInfos[0].imageView = albedoView;
+        imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[1].sampler = g_lightingSampler;
+        imageInfos[1].imageView = normalView;
+        imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet writes[2]{};
+        for (int i = 0; i < 2; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = g_lightingDescriptorSet;
+            writes[i].dstBinding = i;
+            writes[i].dstArrayElement = 0;
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[i].descriptorCount = 1;
+            writes[i].pImageInfo = &imageInfos[i];
+        }
+        vkUpdateDescriptorSets(g_rhi->ctx().device(), 2, writes, 0, nullptr);
+    }
+
+    // ---- Real execute lambdas (reference global handles, compiled once) ----
+    // Note: execute lambdas capture nothing by value; they read globals at execution time
+    spdlog::info("Deferred Shading pipeline initialized (GBuffer + Lighting)");
     // ---
 }
 
@@ -281,6 +441,24 @@ void cleanupApp() {
     if (g_rhi) {
         vkDeviceWaitIdle(g_rhi->ctx().device());
     }
+
+    if (g_lightingDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(g_rhi->ctx().device(), g_lightingDescriptorPool, nullptr);
+    }
+    if (g_lightingDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(g_rhi->ctx().device(), g_lightingDescriptorSetLayout, nullptr);
+    }
+    if (g_lightingSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(g_rhi->ctx().device(), g_lightingSampler, nullptr);
+    }
+    if (g_gbufferFramebuffer != VK_NULL_HANDLE) {
+        vkDestroyFramebuffer(g_rhi->ctx().device(), g_gbufferFramebuffer, nullptr);
+    }
+    if (g_gbufferRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(g_rhi->ctx().device(), g_gbufferRenderPass, nullptr);
+    }
+
+    g_renderGraph.reset();
     g_camera.reset();
     g_scene.reset();
     g_rhi.reset();

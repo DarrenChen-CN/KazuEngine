@@ -48,7 +48,11 @@ public:
     // ------------------------------------------------------------------------
     // Pass declaration
     // ------------------------------------------------------------------------
+    enum class PassType { Graphics, Compute };
+
     struct PassBuilder {
+        PassType type = PassType::Graphics;
+
         void read(ResourceHandle resource) {
             reads.push_back(resource);
         }
