@@ -4,10 +4,28 @@
 
 #include "rendergraph/RenderGraph.h"
 #include "core/Context.h"
+#include <spdlog/spdlog.h>
 #include <queue>
 #include <unordered_set>
 
 namespace kazu {
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+static VkImageAspectFlags aspectMaskFromFormat(VkFormat format) {
+    switch (format) {
+    case VK_FORMAT_D32_SFLOAT:
+    case VK_FORMAT_D16_UNORM:
+        return VK_IMAGE_ASPECT_DEPTH_BIT;
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+        return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    default:
+        return VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+}
 
 // ============================================================================
 // Construction
@@ -116,6 +134,7 @@ bool RenderGraph::compile() {
 
     // Allocate transient resources after successful topological sort
     allocateResources();
+    deriveBarriers();
     return true;
 }
 
@@ -153,6 +172,114 @@ void RenderGraph::allocateResources() {
     }
 }
 
+// ============================================================================
+// Barrier Derivation
+// ============================================================================
+
+// Track the current Vulkan state of each transient image.
+struct ResourceState {
+    VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    VkAccessFlags access = 0;
+};
+
+struct UsageInfo {
+    VkPipelineStageFlags stage;
+    VkAccessFlags access;
+    VkImageLayout layout;
+};
+
+static UsageInfo getWriteUsageInfo(bool isDepth) {
+    if (isDepth) {
+        return {
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        };
+    } else {
+        return {
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        };
+    }
+}
+
+static UsageInfo getReadUsageInfo() {
+    return {
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_SHADER_READ_BIT,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+}
+
+void RenderGraph::deriveBarriers() {
+    if (m_sortedIndices.empty()) return;
+
+    std::vector<ResourceState> states(m_resources.size());
+
+    for (uint32_t sortedIdx : m_sortedIndices) {
+        auto& pass = m_passes[sortedIdx];
+        pass.preBarrier = {}; // clear any previous barriers
+
+        auto emitBarrier = [&](ResourceHandle rh, const ResourceState& oldState, const UsageInfo& newUsage) {
+            const auto& res = m_resources[rh];
+            if (!res.image) return; // buffer or unallocated
+
+            VkImageMemoryBarrier barrier{};
+            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+            barrier.oldLayout = oldState.layout;
+            barrier.newLayout = newUsage.layout;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            barrier.image = res.image->handle();
+            barrier.subresourceRange.aspectMask = aspectMaskFromFormat(res.desc.format);
+            barrier.subresourceRange.baseMipLevel = 0;
+            barrier.subresourceRange.levelCount = 1;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.layerCount = 1;
+            barrier.srcAccessMask = oldState.access;
+            barrier.dstAccessMask = newUsage.access;
+
+            pass.preBarrier.barriers.push_back(barrier);
+            pass.preBarrier.srcStage |= oldState.stage;
+            pass.preBarrier.dstStage |= newUsage.stage;
+        };
+
+        // Process reads first.
+        // Note: in the current simplified model, a resource is never both read
+        // and written in the same pass. If that changes, writes should take
+        // precedence (they represent the final state of the pass).
+        for (ResourceHandle rh : pass.reads) {
+            if (rh >= m_resources.size()) continue;
+            const auto& res = m_resources[rh];
+            if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer
+
+            const auto& oldState = states[rh];
+            UsageInfo readInfo = getReadUsageInfo();
+            emitBarrier(rh, oldState, readInfo);
+            states[rh] = {readInfo.layout, readInfo.stage, readInfo.access};
+        }
+
+        // Process writes
+        for (ResourceHandle rh : pass.writes) {
+            if (rh >= m_resources.size()) continue;
+            const auto& res = m_resources[rh];
+            if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer
+
+            bool isDepth = (res.desc.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+            const auto& oldState = states[rh];
+            UsageInfo writeInfo = getWriteUsageInfo(isDepth);
+            emitBarrier(rh, oldState, writeInfo);
+            states[rh] = {writeInfo.layout, writeInfo.stage, writeInfo.access};
+        }
+
+        spdlog::debug("[RenderGraph] Pass '{}' pre-barriers: {} (srcStage=0x{:x}, dstStage=0x{:x})",
+                      pass.name, pass.preBarrier.barriers.size(),
+                      pass.preBarrier.srcStage, pass.preBarrier.dstStage);
+    }
+}
+
 // Returns true if pass 'reader' must execute after pass 'writer'
 // because writer produces a resource that reader consumes.
 bool RenderGraph::hasDependency(uint32_t writerIdx, uint32_t readerIdx) const {
@@ -181,6 +308,18 @@ void RenderGraph::execute(VkCommandBuffer cmd) const {
 
     for (uint32_t idx : m_sortedIndices) {
         const auto& pass = m_passes[idx];
+
+        if (!pass.preBarrier.barriers.empty()) {
+            vkCmdPipelineBarrier(cmd,
+                pass.preBarrier.srcStage,
+                pass.preBarrier.dstStage,
+                0,
+                0, nullptr,
+                0, nullptr,
+                static_cast<uint32_t>(pass.preBarrier.barriers.size()),
+                pass.preBarrier.barriers.data());
+        }
+
         if (pass.execute) {
             pass.execute(cmd);
         }

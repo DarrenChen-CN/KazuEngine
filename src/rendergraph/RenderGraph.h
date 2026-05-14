@@ -102,11 +102,18 @@ private:
         std::unique_ptr<Image> image;  // allocated after compile()
     };
 
+    struct BarrierBatch {
+        VkPipelineStageFlags srcStage = 0;
+        VkPipelineStageFlags dstStage = 0;
+        std::vector<VkImageMemoryBarrier> barriers;
+    };
+
     struct PassNode {
         std::string name;
         std::function<void(VkCommandBuffer)> execute;
         std::vector<ResourceHandle> reads;
         std::vector<ResourceHandle> writes; // flattened: colors + depth
+        BarrierBatch preBarrier;            // filled by deriveBarriers()
     };
 
     Context* m_ctx = nullptr;
@@ -116,6 +123,7 @@ private:
 
     bool hasDependency(uint32_t writerIdx, uint32_t readerIdx) const;
     void allocateResources();
+    void deriveBarriers();
 };
 
 } // namespace kazu
