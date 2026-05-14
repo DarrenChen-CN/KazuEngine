@@ -248,16 +248,28 @@ PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = m_samples;
 
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-                                        | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    colorBlendAttachment.blendEnable = VK_FALSE;
+    // Determine color attachment count from fragment shader reflection (MRT support)
+    uint32_t colorAttachmentCount = 1;
+    for (const auto& path : m_shaderPaths) {
+        const auto& refl = m_shaderLib.getReflection(path);
+        if (refl.stage == VK_SHADER_STAGE_FRAGMENT_BIT && refl.outputAttachmentCount > 0) {
+            colorAttachmentCount = refl.outputAttachmentCount;
+            break;
+        }
+    }
+
+    std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments(colorAttachmentCount);
+    for (auto& att : colorBlendAttachments) {
+        att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
+                           | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        att.blendEnable = VK_FALSE;
+    }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount = colorAttachmentCount;
+    colorBlending.pAttachments = colorBlendAttachments.data();
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;

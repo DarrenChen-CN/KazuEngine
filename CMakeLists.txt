@@ -135,6 +135,7 @@ file(MAKE_DIRECTORY ${SHADER_BINARY_DIR})
 set(SHADERS
     ${SHADER_SOURCE_DIR}/triangle.vert
     ${SHADER_SOURCE_DIR}/triangle.frag
+    ${SHADER_SOURCE_DIR}/gbuffer.frag
 )
 
 foreach(SHADER ${SHADERS})

@@ -139,6 +139,22 @@ ShaderReflection ShaderLibrary::reflectSPIRV(const std::vector<char>& code) {
         }
     }
 
+    // Output variables (for fragment shaders: determines MRT attachment count)
+    if (spvModule.shader_stage == SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT) {
+        uint32_t outputCount = 0;
+        spvReflectEnumerateOutputVariables(&spvModule, &outputCount, nullptr);
+        if (outputCount > 0) {
+            std::vector<SpvReflectInterfaceVariable*> outputs(outputCount);
+            spvReflectEnumerateOutputVariables(&spvModule, &outputCount, outputs.data());
+            for (uint32_t i = 0; i < outputCount; ++i) {
+                if (outputs[i]->decoration_flags & SPV_REFLECT_DECORATION_BUILT_IN) {
+                    continue;
+                }
+                refl.outputAttachmentCount++;
+            }
+        }
+    }
+
     // Vertex input variables (only for vertex shaders)
     if (spvModule.shader_stage == SPV_REFLECT_SHADER_STAGE_VERTEX_BIT) {
         uint32_t inputCount = 0;

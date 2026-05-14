@@ -75,6 +75,7 @@ struct ShaderReflection {
     std::vector<ShaderPushConstantRange> pushConstantRanges;
     std::vector<ShaderVertexInputAttribute> vertexInputs;
     std::string entryPoint = "main";
+    uint32_t outputAttachmentCount = 0; // fragment shader MRT outputs (non-built-in)
 };
 
 } // namespace kazu

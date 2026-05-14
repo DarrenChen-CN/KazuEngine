@@ -12,6 +12,8 @@
 #include "core/Utils.h"
 #include "rhi/RHI.h"
 #include "rhi/Camera.h"
+#include "rhi/PipelineBuilder.h"
+#include "rhi/PipelineCache.h"
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
 
@@ -207,6 +209,70 @@ void initApp() {
             assert(rg.getImageView(unused) == VK_NULL_HANDLE);
             spdlog::info("RenderGraph 4.2 transient allocation test passed.");
         }
+    }
+    // ---
+
+    // --- 4.3a GBuffer MRT Pipeline smoke test ---
+    {
+        VkAttachmentDescription attachments[4]{};
+        // Albedo
+        attachments[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+        attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        // Normal
+        attachments[1] = attachments[0];
+        // Material
+        attachments[2] = attachments[0];
+        // Depth
+        attachments[3].format = VK_FORMAT_D32_SFLOAT;
+        attachments[3].samples = VK_SAMPLE_COUNT_1_BIT;
+        attachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachments[3].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachments[3].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachments[3].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentReference colorRefs[3] = {
+            {0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+            {1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+            {2, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        };
+        VkAttachmentReference depthRef = {3, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 3;
+        subpass.pColorAttachments = colorRefs;
+        subpass.pDepthStencilAttachment = &depthRef;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = 4;
+        rpInfo.pAttachments = attachments;
+        rpInfo.subpassCount = 1;
+        rpInfo.pSubpasses = &subpass;
+
+        VkRenderPass gbufferRP;
+        VK_CHECK(vkCreateRenderPass(g_rhi->ctx().device(), &rpInfo, nullptr, &gbufferRP));
+
+        kazu::PipelineCache tempCache(g_rhi->ctx());
+        kazu::PipelineBuilder builder(g_rhi->ctx(), g_rhi->shaderLib(), g_rhi->dslCache());
+        builder.shader("shaders/gbuffer.frag.spv")
+               .shader("shaders/triangle.vert.spv")
+               .renderPass(gbufferRP);
+        auto result = builder.build(tempCache);
+
+        assert(result.pipeline != nullptr);
+        assert(result.layout != nullptr);
+        spdlog::info("GBuffer MRT pipeline test passed");
+
+        vkDestroyRenderPass(g_rhi->ctx().device(), gbufferRP, nullptr);
     }
     // ---
 }
