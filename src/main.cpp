@@ -43,9 +43,10 @@ const float PAN_SENSITIVITY = 2.0f;
 
 void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (key == GLFW_KEY_D && action == GLFW_PRESS && g_deferred) {
-        int mode = (g_deferred->displayMode() + 1) % 2;
+        int mode = (g_deferred->displayMode() + 1) % 3;
         g_deferred->setDisplayMode(mode);
-        spdlog::info("Display mode: {}", mode == 0 ? "color" : "depth");
+        const char* name = (mode == 0) ? "lighting" : (mode == 1) ? "albedo" : "normal";
+        spdlog::info("Display mode: {}", name);
     }
 }
 

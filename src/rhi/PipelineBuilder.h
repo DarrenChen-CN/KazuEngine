@@ -47,6 +47,8 @@ public:
     PipelineBuilder& polygonMode(VkPolygonMode mode);
     PipelineBuilder& lineWidth(float width);
     PipelineBuilder& samples(VkSampleCountFlagBits samples);
+    PipelineBuilder& depthTest(bool enable);
+    PipelineBuilder& depthWrite(bool enable);
 
     // Build: checks PipelineCache first; on miss creates DSL (via cache) + PL + GP
     PipelineBuildResult build(PipelineCache& cache);
@@ -67,6 +69,8 @@ private:
     VkPolygonMode m_polygonMode = VK_POLYGON_MODE_FILL;
     float m_lineWidth = 1.0f;
     VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
+    bool m_depthTest = true;
+    bool m_depthWrite = true;
 };
 
 } // namespace kazu

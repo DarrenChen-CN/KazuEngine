@@ -7,6 +7,7 @@
 #include "rhi/RHI.h"
 #include "rhi/PipelineBuilder.h"
 #include "rhi/PipelineCache.h"
+#include "core/PipelineLayout.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
@@ -234,28 +235,33 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
 
     // GBuffer Pipeline
     {
-        static PipelineCache s_cache(m_rhi->ctx());
+        m_gbufferPipelineCache = std::make_unique<PipelineCache>(m_rhi->ctx());
         PipelineBuilder builder(m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache());
         builder.shader("shaders/gbuffer.frag.spv")
                .shader("shaders/triangle.vert.spv")
-               .renderPass(m_gbufferRenderPass);
-        auto result = builder.build(s_cache);
+               .renderPass(m_gbufferRenderPass)
+               .cullMode(VK_CULL_MODE_NONE);
+        auto result = builder.build(*m_gbufferPipelineCache);
         m_gbufferPipeline = result.pipeline->handle();
-        m_gbufferPipelineLayout = result.layout->handle();
-        (void)result.layout.release();
+        m_gbufferPipelineLayoutObj = std::move(result.layout);
+        m_gbufferPipelineLayout = m_gbufferPipelineLayoutObj->handle();
     }
 
     // Lighting Pipeline
     {
-        static PipelineCache s_cache(m_rhi->ctx());
+        m_lightingPipelineCache = std::make_unique<PipelineCache>(m_rhi->ctx());
         PipelineBuilder builder(m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache());
         builder.shader("shaders/lighting.frag.spv")
                .shader("shaders/lighting.vert.spv")
-               .renderPass(m_rhi->renderPass());
-        auto result = builder.build(s_cache);
+               .renderPass(m_rhi->renderPass())
+               .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
+               .cullMode(VK_CULL_MODE_NONE)
+               .depthTest(false)
+               .depthWrite(false);
+        auto result = builder.build(*m_lightingPipelineCache);
         m_lightingPipeline = result.pipeline->handle();
-        m_lightingPipelineLayout = result.layout->handle();
-        (void)result.layout.release();
+        m_lightingPipelineLayoutObj = std::move(result.layout);
+        m_lightingPipelineLayout = m_lightingPipelineLayoutObj->handle();
     }
 
     // Lighting Descriptor Set

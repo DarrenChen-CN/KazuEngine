@@ -99,6 +99,16 @@ PipelineBuilder& PipelineBuilder::samples(VkSampleCountFlagBits samples) {
     return *this;
 }
 
+PipelineBuilder& PipelineBuilder::depthTest(bool enable) {
+    m_depthTest = enable;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::depthWrite(bool enable) {
+    m_depthWrite = enable;
+    return *this;
+}
+
 PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     if (m_shaderPaths.empty()) {
         fatalError("PipelineBuilder: no shaders specified");
@@ -273,10 +283,9 @@ PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
-    depthStencil.depthTestEnable = VK_TRUE;
-    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthTestEnable = m_depthTest ? VK_TRUE : VK_FALSE;
+    depthStencil.depthWriteEnable = m_depthWrite ? VK_TRUE : VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
-    // depthStencil.depthCompareOp = VK_COMPARE_OP_GREATER_OR_EQUAL; // Allow equal for skybox
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 

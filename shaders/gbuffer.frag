@@ -12,8 +12,12 @@ layout(location = 1) out vec4 outNormal;
 layout(location = 2) out vec4 outMaterial;
 
 void main() {
+    // Vulkan texture origin is top-left, OBJ UV origin is bottom-left
+    vec2 uv = fragTexCoord;
+    uv.y = 1.0 - uv.y;
+
     // Albedo: sample diffuse texture
-    outAlbedo = texture(texSampler, fragTexCoord);
+    outAlbedo = texture(texSampler, uv);
 
     // Normal: pack [-1,1] to [0,1] for RGBA8 storage
     outNormal = vec4(normalize(fragNormal) * 0.5 + 0.5, 1.0);

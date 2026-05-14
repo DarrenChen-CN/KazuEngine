@@ -20,6 +20,8 @@ class RHI;
 class Scene;
 class Camera;
 class RenderGraph;
+class PipelineCache;
+class PipelineLayout;
 
 class DeferredShading {
 public:
@@ -49,6 +51,8 @@ private:
     VkFramebuffer  m_gbufferFramebuffer  = VK_NULL_HANDLE;
     VkPipeline     m_gbufferPipeline     = VK_NULL_HANDLE;
     VkPipelineLayout m_gbufferPipelineLayout = VK_NULL_HANDLE;
+    std::unique_ptr<PipelineLayout>  m_gbufferPipelineLayoutObj;
+    std::unique_ptr<PipelineCache>   m_gbufferPipelineCache;
 
     // Lighting
     VkPipeline     m_lightingPipeline     = VK_NULL_HANDLE;
@@ -57,6 +61,8 @@ private:
     VkDescriptorSet  m_lightingDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorPool m_lightingDescriptorPool = VK_NULL_HANDLE;
     VkSampler        m_lightingSampler = VK_NULL_HANDLE;
+    std::unique_ptr<PipelineLayout>  m_lightingPipelineLayoutObj;
+    std::unique_ptr<PipelineCache>   m_lightingPipelineCache;
 
     VkImageView m_albedoView = VK_NULL_HANDLE;
     VkImageView m_normalView = VK_NULL_HANDLE;
