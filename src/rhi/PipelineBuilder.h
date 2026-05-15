@@ -65,7 +65,7 @@ private:
     // Fixed-function states
     VkPrimitiveTopology m_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkCullModeFlags m_cullMode = VK_CULL_MODE_BACK_BIT;
-    VkFrontFace m_frontFace = VK_FRONT_FACE_CLOCKWISE;
+    VkFrontFace m_frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     VkPolygonMode m_polygonMode = VK_POLYGON_MODE_FILL;
     float m_lineWidth = 1.0f;
     VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;

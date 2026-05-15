@@ -240,7 +240,8 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
         builder.shader("shaders/gbuffer.frag.spv")
                .shader("shaders/triangle.vert.spv")
                .renderPass(m_gbufferRenderPass)
-               .cullMode(VK_CULL_MODE_NONE);
+               .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
+               .cullMode(VK_CULL_MODE_BACK_BIT);
         auto result = builder.build(*m_gbufferPipelineCache);
         m_gbufferPipeline = result.pipeline->handle();
         m_gbufferPipelineLayoutObj = std::move(result.layout);
