@@ -1,18 +1,15 @@
 // ============================================================================
-// KazuEngine - Technique Layer: Deferred Shading
+// KazuEngine - Technique Layer: Deferred Shading (Composer)
 //
-// Encapsulates the full Deferred Shading pipeline:
-//   - GBuffer Pass (MRT: Albedo/Normal/Material + Depth)
-//   - Lighting Pass (full-screen quad, samples GBuffer)
-//
-// RenderGraph drives execution order and barrier derivation.
-// Application layer (main.cpp) only calls init() and renderGraph()->execute().
+// Pure composer: owns RenderGraph, assembles GBufferPass + LightingPass.
+// No direct VK object creation — only bridge & state forwarding.
 // ============================================================================
 
 #pragma once
 
 #include <vulkan/vulkan.h>
 #include <memory>
+#include "rendergraph/RenderGraph.h"
 
 namespace kazu {
 
@@ -22,6 +19,7 @@ class Camera;
 class RenderGraph;
 class PipelineCache;
 class PipelineLayout;
+class GBufferPass;
 
 class DeferredShading {
 public:
@@ -36,25 +34,28 @@ public:
 
     void setCurrentImageIndex(uint32_t idx) { m_currentImageIndex = idx; }
 
+    // Expose GBuffer outputs for downstream passes / external techniques
+    RenderGraph::ResourceHandle albedoHandle() const;
+    RenderGraph::ResourceHandle normalHandle() const;
+    RenderGraph::ResourceHandle materialHandle() const;
+    RenderGraph::ResourceHandle depthHandle() const;
+
 private:
-    void createGBufferResources();
-    void createLightingResources();
-    void buildRenderGraph();
+    void buildLightingPipelineAndDescriptors();
 
     RHI*   m_rhi   = nullptr;
     Scene* m_scene = nullptr;
     Camera* m_camera = nullptr;
     int    m_displayMode = 0;
+    uint32_t m_currentImageIndex = 0;
 
-    // GBuffer
-    VkRenderPass   m_gbufferRenderPass   = VK_NULL_HANDLE;
-    VkFramebuffer  m_gbufferFramebuffer  = VK_NULL_HANDLE;
-    VkPipeline     m_gbufferPipeline     = VK_NULL_HANDLE;
-    VkPipelineLayout m_gbufferPipelineLayout = VK_NULL_HANDLE;
-    std::unique_ptr<PipelineLayout>  m_gbufferPipelineLayoutObj;
-    std::unique_ptr<PipelineCache>   m_gbufferPipelineCache;
+    // Passes
+    std::unique_ptr<GBufferPass> m_gbufferPass;
 
-    // Lighting
+    // RenderGraph (shared infrastructure)
+    std::unique_ptr<RenderGraph> m_renderGraph;
+
+    // ---- Lighting (to be extracted into LightingPass in next Nano-Feature) ----
     VkPipeline     m_lightingPipeline     = VK_NULL_HANDLE;
     VkPipelineLayout m_lightingPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_lightingDescriptorSetLayout = VK_NULL_HANDLE;
@@ -63,12 +64,6 @@ private:
     VkSampler        m_lightingSampler = VK_NULL_HANDLE;
     std::unique_ptr<PipelineLayout>  m_lightingPipelineLayoutObj;
     std::unique_ptr<PipelineCache>   m_lightingPipelineCache;
-
-    VkImageView m_albedoView = VK_NULL_HANDLE;
-    VkImageView m_normalView = VK_NULL_HANDLE;
-    uint32_t m_currentImageIndex = 0;
-
-    std::unique_ptr<RenderGraph> m_renderGraph;
 };
 
 } // namespace kazu
