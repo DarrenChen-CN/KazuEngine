@@ -7,7 +7,7 @@
 
 #pragma once
 #include <vulkan/vulkan.h>
-#include "rendergraph/Pass.h"
+#include "pass/Pass.h"
 #include "rendergraph/RenderGraph.h"
 
 namespace kazu {
