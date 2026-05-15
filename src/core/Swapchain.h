@@ -39,6 +39,7 @@ public:
     VkExtent2D extent() const { return m_extent; }
     uint32_t imageCount() const { return static_cast<uint32_t>(m_images.size()); }
     VkFramebuffer framebuffer(uint32_t index) const { return m_framebuffers[index]; }
+    VkImageView imageView(uint32_t index) const { return m_imageViews[index]; }
     VkSwapchainKHR handle() const { return m_swapchain; }
 
 private:

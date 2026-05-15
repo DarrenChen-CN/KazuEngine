@@ -112,6 +112,18 @@ target_include_directories(KazuEngine PRIVATE
     ${json_SOURCE_DIR}/single_include
     ${spirv-reflect_SOURCE_DIR}
     ${spirv-reflect_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/external/imgui
+    ${CMAKE_SOURCE_DIR}/external/imgui/backends
+)
+
+# ImGui (submodule)
+target_sources(KazuEngine PRIVATE
+    ${CMAKE_SOURCE_DIR}/external/imgui/imgui.cpp
+    ${CMAKE_SOURCE_DIR}/external/imgui/imgui_draw.cpp
+    ${CMAKE_SOURCE_DIR}/external/imgui/imgui_tables.cpp
+    ${CMAKE_SOURCE_DIR}/external/imgui/imgui_widgets.cpp
+    ${CMAKE_SOURCE_DIR}/external/imgui/backends/imgui_impl_glfw.cpp
+    ${CMAKE_SOURCE_DIR}/external/imgui/backends/imgui_impl_vulkan.cpp
 )
 
 # SPIRV-Reflect C implementation

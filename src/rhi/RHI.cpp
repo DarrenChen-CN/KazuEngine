@@ -231,6 +231,15 @@ VkRenderPass RHI::renderPass() const {
 VkFramebuffer RHI::framebuffer(uint32_t imageIndex) const {
     return m_swapchain->framebuffer(imageIndex);
 }
+VkImageView RHI::swapchainImageView(uint32_t imageIndex) const {
+    return m_swapchain->imageView(imageIndex);
+}
+uint32_t RHI::swapchainImageCount() const {
+    return m_swapchain->imageCount();
+}
+VkFormat RHI::swapchainFormat() const {
+    return m_swapchain->format();
+}
 VkExtent2D RHI::extent() const {
     return m_swapchain->extent();
 }

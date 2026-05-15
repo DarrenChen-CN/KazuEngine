@@ -47,6 +47,9 @@ public:
     VkPipelineLayout pipelineLayout() const;
     VkRenderPass renderPass() const;
     VkFramebuffer framebuffer(uint32_t imageIndex) const;
+    VkImageView swapchainImageView(uint32_t imageIndex) const;
+    uint32_t swapchainImageCount() const;
+    VkFormat swapchainFormat() const;
     VkExtent2D extent() const;
     float aspect() const;
 

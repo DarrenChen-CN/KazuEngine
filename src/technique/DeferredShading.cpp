@@ -5,6 +5,7 @@
 #include "technique/DeferredShading.h"
 #include "pass/GBufferPass.h"
 #include "pass/LightingPass.h"
+#include "app/AppUI.h"
 #include "core/Utils.h"
 #include "rhi/RHI.h"
 #include "rhi/Camera.h"
@@ -47,6 +48,19 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
     m_lightingPass->create(m_scene, m_camera, m_renderGraph.get());
 
     spdlog::info("DeferredShading initialized (pure composer)");
+}
+
+void DeferredShading::exposePanel(PanelDesc& desc) {
+    desc.name = "Deferred Shading";
+    static const char* modes[] = {"Lighting", "Albedo", "Normal"};
+    PanelItem displayModeItem{};
+    displayModeItem.type = PanelItem::Enum;
+    displayModeItem.label = "Display Mode";
+    displayModeItem.e.value = &m_displayMode;
+    displayModeItem.e.names = modes;
+    displayModeItem.e.count = 3;
+    desc.items.push_back(displayModeItem);
+    desc.items.push_back({PanelItem::Separator, "", {}});
 }
 
 void DeferredShading::setDisplayMode(int mode) {

@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include "app/AppUI.h"
 #include "rendergraph/RenderGraph.h"
 
 namespace kazu {
@@ -37,6 +38,9 @@ public:
     RenderGraph::ResourceHandle normalHandle() const;
     RenderGraph::ResourceHandle materialHandle() const;
     RenderGraph::ResourceHandle depthHandle() const;
+
+    // Build panel description for AppUI (zero ImGui dependency)
+    void exposePanel(PanelDesc& desc);
 
 private:
     RHI*   m_rhi   = nullptr;

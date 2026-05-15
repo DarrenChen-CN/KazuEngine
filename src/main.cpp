@@ -15,6 +15,7 @@
 #include "scene/Scene.h"
 #include "technique/DeferredShading.h"
 #include "rendergraph/RenderGraph.h"
+#include "app/AppUI.h"
 
 #include <memory>
 
@@ -28,6 +29,7 @@ std::unique_ptr<kazu::RHI> g_rhi;
 std::unique_ptr<kazu::Scene> g_scene;
 std::unique_ptr<kazu::Camera> g_camera;
 std::unique_ptr<kazu::DeferredShading> g_deferred;
+std::unique_ptr<kazu::AppUI> g_appUI;
 
 // Mouse input
 int g_dragButton = -1;
@@ -97,6 +99,12 @@ void framebufferResizeCallback(GLFWwindow* window, int width, int height) {
 void recordFrame(uint32_t imageIndex) {
     g_deferred->setCurrentImageIndex(imageIndex);
     g_deferred->renderGraph()->execute(g_rhi->currentCmd());
+
+    g_appUI->beginFrame();
+    kazu::PanelDesc desc;
+    g_deferred->exposePanel(desc);
+    g_appUI->drawPanel(desc);
+    g_appUI->endFrame(g_rhi->currentCmd(), imageIndex);
 }
 
 // ============================================================================
@@ -119,9 +127,13 @@ void initApp() {
 
     g_deferred = std::make_unique<kazu::DeferredShading>();
     g_deferred->init(g_rhi.get(), g_scene.get(), g_camera.get());
+
+    g_appUI = std::make_unique<kazu::AppUI>();
+    g_appUI->init(g_rhi.get(), g_window);
 }
 
 void cleanupApp() {
+    g_appUI.reset();
     g_deferred.reset();
     g_camera.reset();
     g_scene.reset();
