@@ -25,6 +25,9 @@ void AppUI::init(RHI* rhi, GLFWwindow* window) {
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
 
+    // Scale UI for readability on standard DPI displays
+    ImGui::GetIO().FontGlobalScale = 1.5f;
+
     ImGui_ImplGlfw_InitForVulkan(window, true);
 
     ImGui_ImplVulkan_InitInfo initInfo{};
@@ -82,6 +85,7 @@ void AppUI::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
 }
 
 void AppUI::drawPanel(const PanelDesc& desc) {
+    ImGui::SetNextWindowSize(ImVec2(240, 120), ImGuiCond_FirstUseEver);
     ImGui::Begin(desc.name.c_str());
     for (const auto& item : desc.items) {
         switch (item.type) {
