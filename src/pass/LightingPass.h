@@ -1,0 +1,59 @@
+// ============================================================================
+// KazuEngine - Pass Layer: Lighting Pass
+//
+// Full-screen quad lighting: samples GBuffer Albedo/Normal, writes to swapchain.
+// ============================================================================
+
+#pragma once
+#include <vulkan/vulkan.h>
+#include "pass/Pass.h"
+#include "rendergraph/RenderGraph.h"
+
+namespace kazu {
+
+class PipelineCache;
+class PipelineLayout;
+
+class LightingPass : public Pass {
+public:
+    LightingPass();
+    ~LightingPass();
+
+    // Pass interface
+    const char* name() const override { return "Lighting"; }
+    void declare(RHI* rhi, RenderGraph* rg) override;
+    void create(Scene* scene, Camera* camera, RenderGraph* rg) override;
+
+    // State forwarded from Technique each frame
+    void setCurrentImageIndex(uint32_t idx) { m_currentImageIndex = idx; }
+    void setDisplayMode(int mode) { m_displayMode = mode; }
+
+    // Called by RenderGraph execute lambda
+    void execute(VkCommandBuffer cmd);
+
+    // Set GBuffer input handles (called before declare)
+    void setInputs(RenderGraph::ResourceHandle albedo, RenderGraph::ResourceHandle normal);
+
+private:
+    RHI*   m_rhi   = nullptr;
+    Scene* m_scene = nullptr;
+    Camera* m_camera = nullptr;
+
+    RenderGraph::ResourceHandle m_albedoHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_normalHandle = RenderGraph::InvalidResource;
+
+    VkPipeline       m_pipeline       = VK_NULL_HANDLE;
+    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet  m_descriptorSet  = VK_NULL_HANDLE;
+    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
+    VkSampler        m_sampler        = VK_NULL_HANDLE;
+
+    uint32_t m_currentImageIndex = 0;
+    int      m_displayMode = 0;
+
+    std::unique_ptr<PipelineLayout> m_pipelineLayoutObj;
+    std::unique_ptr<PipelineCache>  m_pipelineCache;
+};
+
+} // namespace kazu
