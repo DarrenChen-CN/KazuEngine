@@ -48,6 +48,9 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
     m_gbufferPass->create(m_scene, m_camera, m_renderGraph.get());
     m_lightingPass->create(m_scene, m_camera, m_renderGraph.get());
 
+    // Restore display mode after resize re-init
+    m_lightingPass->setDisplayMode(m_displayMode);
+
     spdlog::info("DeferredShading initialized (pure composer)");
 }
 

@@ -80,6 +80,7 @@ void Application::run() {
         uint32_t imageIndex = 0;
         if (!m_rhi->beginFrame(imageIndex)) {
             if (m_appUI) m_appUI->onResize();
+            if (m_deferred) m_deferred->init(m_rhi.get(), m_scene.get(), m_camera.get());
             continue;
         }
 
