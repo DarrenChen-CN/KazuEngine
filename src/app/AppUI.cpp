@@ -26,7 +26,9 @@ void AppUI::init(RHI* rhi, GLFWwindow* window) {
     ImGui::StyleColorsDark();
 
     // Scale UI for readability on standard DPI displays
-    ImGui::GetIO().FontGlobalScale = 1.5f;
+    ImGuiIO& io = ImGui::GetIO();
+    io.FontGlobalScale = 1.5f;
+    io.IniFilename = nullptr;  // Don't save window state to imgui.ini
 
     ImGui_ImplGlfw_InitForVulkan(window, true);
 
@@ -48,7 +50,12 @@ void AppUI::init(RHI* rhi, GLFWwindow* window) {
     // Fonts are uploaded automatically by NewFrame() on first use
 }
 
+AppUI::~AppUI() {
+    shutdown();
+}
+
 void AppUI::shutdown() {
+    if (!m_rhi) return;
     VkDevice device = m_rhi->ctx().device();
     vkDeviceWaitIdle(device);
 
@@ -58,10 +65,16 @@ void AppUI::shutdown() {
 
     for (auto fb : m_framebuffers)
         vkDestroyFramebuffer(device, fb, nullptr);
-    if (m_renderPass)
+    m_framebuffers.clear();
+    if (m_renderPass) {
         vkDestroyRenderPass(device, m_renderPass, nullptr);
-    if (m_descriptorPool)
+        m_renderPass = VK_NULL_HANDLE;
+    }
+    if (m_descriptorPool) {
         vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);
+        m_descriptorPool = VK_NULL_HANDLE;
+    }
+    m_rhi = nullptr;
 }
 
 void AppUI::beginFrame() {
@@ -85,12 +98,14 @@ void AppUI::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
 }
 
 void AppUI::drawPanel(const PanelDesc& desc) {
-    ImGui::SetNextWindowSize(ImVec2(240, 120), ImGuiCond_FirstUseEver);
-    ImGui::Begin(desc.name.c_str());
+    ImGui::SetNextWindowSize(ImVec2(320, 140), ImGuiCond_Always);
+    ImGui::Begin(desc.name.c_str(), nullptr, ImGuiWindowFlags_NoResize);
     for (const auto& item : desc.items) {
         switch (item.type) {
             case PanelItem::Enum:
+                ImGui::PushItemWidth(140);
                 ImGui::Combo(item.label.c_str(), item.e.value, item.e.names, item.e.count);
+                ImGui::PopItemWidth();
                 break;
             case PanelItem::Bool:
                 ImGui::Checkbox(item.label.c_str(), item.b.value);
@@ -152,6 +167,16 @@ void AppUI::createRenderPass() {
     info.subpassCount = 1;
     info.pSubpasses = &subpass;
     VK_CHECK(vkCreateRenderPass(m_rhi->ctx().device(), &info, nullptr, &m_renderPass));
+}
+
+void AppUI::onResize() {
+    if (!m_rhi) return;
+    VkDevice device = m_rhi->ctx().device();
+    vkDeviceWaitIdle(device);
+    for (auto fb : m_framebuffers)
+        vkDestroyFramebuffer(device, fb, nullptr);
+    m_framebuffers.clear();
+    createFramebuffers();
 }
 
 void AppUI::createFramebuffers() {

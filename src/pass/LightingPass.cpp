@@ -4,6 +4,7 @@
 
 #include "pass/LightingPass.h"
 #include "core/Utils.h"
+#include "core/Path.h"
 #include "rhi/RHI.h"
 #include "rhi/PipelineBuilder.h"
 #include "rhi/PipelineCache.h"
@@ -19,6 +20,7 @@ namespace kazu {
 namespace {
 
 struct LightingPush {
+    glm::mat4 invViewProj;
     glm::vec4 lightPos;
     glm::vec4 viewPos;
     int displayMode;
@@ -41,9 +43,12 @@ LightingPass::~LightingPass() {
         vkDestroySampler(device, m_sampler, nullptr);
 }
 
-void LightingPass::setInputs(RenderGraph::ResourceHandle albedo, RenderGraph::ResourceHandle normal) {
+void LightingPass::setInputs(RenderGraph::ResourceHandle albedo,
+                                RenderGraph::ResourceHandle normal,
+                                RenderGraph::ResourceHandle depth) {
     m_albedoHandle = albedo;
     m_normalHandle = normal;
+    m_depthHandle = depth;
 }
 
 void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
@@ -53,6 +58,7 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
     rg->addPass("Lighting", [&](RenderGraph::PassBuilder& b) {
         b.read(self->m_albedoHandle);
         b.read(self->m_normalHandle);
+        b.read(self->m_depthHandle);
         b.execute = [self](VkCommandBuffer cmd) {
             self->execute(cmd);
         };
@@ -70,8 +76,8 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     {
         m_pipelineCache = std::make_unique<PipelineCache>(m_rhi->ctx());
         PipelineBuilder builder(m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache());
-        builder.shader("shaders/lighting.frag.spv")
-               .shader("shaders/lighting.vert.spv")
+        builder.shader(kazu::Path::resolveShader("lighting.frag.spv"))
+               .shader(kazu::Path::resolveShader("lighting.vert.spv"))
                .renderPass(m_rhi->renderPass())
                .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
                .cullMode(VK_CULL_MODE_NONE)
@@ -94,7 +100,7 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         VK_CHECK(vkCreateSampler(m_rhi->ctx().device(), &samplerInfo, nullptr, &m_sampler));
 
-        VkDescriptorSetLayoutBinding bindings[2]{};
+        VkDescriptorSetLayoutBinding bindings[3]{};
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = 1;
@@ -103,16 +109,20 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
         bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[1].descriptorCount = 1;
         bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[2].binding = 2;
+        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[2].descriptorCount = 1;
+        bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutCreateInfo dslInfo{};
         dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dslInfo.bindingCount = 2;
+        dslInfo.bindingCount = 3;
         dslInfo.pBindings = bindings;
         VK_CHECK(vkCreateDescriptorSetLayout(m_rhi->ctx().device(), &dslInfo, nullptr, &m_descriptorSetLayout));
 
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 2;
+        poolSize.descriptorCount = 3;
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets = 1;
@@ -127,16 +137,21 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
         allocInfo.pSetLayouts = &m_descriptorSetLayout;
         VK_CHECK(vkAllocateDescriptorSets(m_rhi->ctx().device(), &allocInfo, &m_descriptorSet));
 
-        VkDescriptorImageInfo imageInfos[2]{};
+        VkImageView depthView = rg->getImageView(m_depthHandle);
+
+        VkDescriptorImageInfo imageInfos[3]{};
         imageInfos[0].sampler = m_sampler;
         imageInfos[0].imageView = albedoView;
         imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         imageInfos[1].sampler = m_sampler;
         imageInfos[1].imageView = normalView;
         imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[2].sampler = m_sampler;
+        imageInfos[2].imageView = depthView;
+        imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet writes[2]{};
-        for (int i = 0; i < 2; ++i) {
+        VkWriteDescriptorSet writes[3]{};
+        for (int i = 0; i < 3; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = m_descriptorSet;
             writes[i].dstBinding = i;
@@ -145,7 +160,7 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
             writes[i].descriptorCount = 1;
             writes[i].pImageInfo = &imageInfos[i];
         }
-        vkUpdateDescriptorSets(m_rhi->ctx().device(), 2, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_rhi->ctx().device(), 3, writes, 0, nullptr);
     }
 }
 
@@ -178,6 +193,10 @@ void LightingPass::execute(VkCommandBuffer cmd) {
         m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
 
     LightingPush push{};
+    float aspect = static_cast<float>(m_rhi->extent().width) / m_rhi->extent().height;
+    glm::mat4 view = m_camera->getViewMatrix();
+    glm::mat4 proj = m_camera->getProjectionMatrix(aspect);
+    push.invViewProj = glm::inverse(proj * view);
     push.lightPos = glm::vec4(m_scene->config().lightPos, 0.0f);
     push.viewPos = glm::vec4(m_camera->position(), 0.0f);
     push.displayMode = m_displayMode;

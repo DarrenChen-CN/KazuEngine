@@ -22,6 +22,8 @@ struct SceneConfig {
     glm::vec3 cameraTarget{0.0f, 0.8f, 0.0f};
     glm::vec3 cameraUp{0.0f, 1.0f, 0.0f};
     glm::vec3 lightPos{2.0f, 3.0f, 2.0f};
+    uint32_t windowWidth = 1280;
+    uint32_t windowHeight = 720;
 };
 
 struct ModelInstance {

@@ -4,6 +4,7 @@
 
 #include "pass/GBufferPass.h"
 #include "core/Utils.h"
+#include "core/Path.h"
 #include "rhi/RHI.h"
 #include "rhi/PipelineBuilder.h"
 #include "rhi/PipelineCache.h"
@@ -55,7 +56,7 @@ void GBufferPass::declare(RHI* rhi, RenderGraph* rg) {
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
     m_depthHandle = rg->addTexture("Depth",
         {m_rhi->extent().width, m_rhi->extent().height, VK_FORMAT_D32_SFLOAT,
-         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT});
+         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
 
     GBufferPass* self = this;
     rg->addPass("GBuffer", [&](RenderGraph::PassBuilder& b) {
@@ -137,8 +138,8 @@ void GBufferPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     {
         m_pipelineCache = std::make_unique<PipelineCache>(m_rhi->ctx());
         PipelineBuilder builder(m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache());
-        builder.shader("shaders/gbuffer.frag.spv")
-               .shader("shaders/triangle.vert.spv")
+        builder.shader(kazu::Path::resolveShader("gbuffer.frag.spv"))
+               .shader(kazu::Path::resolveShader("triangle.vert.spv"))
                .renderPass(m_renderPass)
                .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
                .cullMode(VK_CULL_MODE_BACK_BIT);

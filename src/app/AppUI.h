@@ -39,8 +39,10 @@ struct PanelDesc {
 // ---------------------------------------------------------------------------
 class AppUI {
 public:
+    ~AppUI();
     void init(RHI* rhi, GLFWwindow* window);
     void shutdown();
+    void onResize();
 
     void beginFrame();
     void endFrame(VkCommandBuffer cmd, uint32_t imageIndex);

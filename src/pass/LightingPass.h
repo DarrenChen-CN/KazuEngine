@@ -32,7 +32,9 @@ public:
     void execute(VkCommandBuffer cmd);
 
     // Set GBuffer input handles (called before declare)
-    void setInputs(RenderGraph::ResourceHandle albedo, RenderGraph::ResourceHandle normal);
+    void setInputs(RenderGraph::ResourceHandle albedo,
+                   RenderGraph::ResourceHandle normal,
+                   RenderGraph::ResourceHandle depth);
 
 private:
     RHI*   m_rhi   = nullptr;
@@ -41,6 +43,7 @@ private:
 
     RenderGraph::ResourceHandle m_albedoHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_normalHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_depthHandle = RenderGraph::InvalidResource;
 
     VkPipeline       m_pipeline       = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;

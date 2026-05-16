@@ -35,7 +35,8 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
     m_lightingPass = std::make_unique<LightingPass>();
     m_lightingPass->setInputs(
         m_gbufferPass->albedoHandle(),
-        m_gbufferPass->normalHandle());
+        m_gbufferPass->normalHandle(),
+        m_gbufferPass->depthHandle());
     m_lightingPass->declare(m_rhi, m_renderGraph.get());
 
     // ---- Phase 2: Compile ----
@@ -70,7 +71,10 @@ void DeferredShading::setDisplayMode(int mode) {
 
 void DeferredShading::setCurrentImageIndex(uint32_t idx) {
     m_currentImageIndex = idx;
-    if (m_lightingPass) m_lightingPass->setCurrentImageIndex(idx);
+    if (m_lightingPass) {
+        m_lightingPass->setCurrentImageIndex(idx);
+        m_lightingPass->setDisplayMode(m_displayMode);
+    }
 }
 
 RenderGraph::ResourceHandle DeferredShading::albedoHandle() const {

@@ -257,6 +257,8 @@ void RenderGraph::deriveBarriers() {
 
             const auto& oldState = states[rh];
             UsageInfo readInfo = getReadUsageInfo();
+            bool isDepth = (res.desc.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+            if (isDepth) readInfo.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             emitBarrier(rh, oldState, readInfo);
             states[rh] = {readInfo.layout, readInfo.stage, readInfo.access};
         }
