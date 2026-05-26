@@ -49,6 +49,20 @@ public:
     PipelineBuilder& samples(VkSampleCountFlagBits samples);
     PipelineBuilder& depthTest(bool enable);
     PipelineBuilder& depthWrite(bool enable);
+    PipelineBuilder& depthCompareOp(VkCompareOp op);
+
+    PipelineBuilder& depthClampEnable(bool enable);
+    PipelineBuilder& rasterizerDiscardEnable(bool enable);
+    PipelineBuilder& depthBiasEnable(bool enable);
+
+    PipelineBuilder& sampleShadingEnable(bool enable);
+
+    // Color blend configuration for attachment 'index' (default: index 0)
+    PipelineBuilder& colorBlendAttachment(uint32_t index, const ColorBlendAttachment& config);
+
+    // Dynamic state flags (default: VIEWPORT, SCISSOR)
+    PipelineBuilder& dynamicState(VkDynamicState state);
+    PipelineBuilder& clearDynamicStates();
 
     // Build: checks PipelineCache first; on miss creates DSL (via cache) + PL + GP
     PipelineBuildResult build(PipelineCache& cache);
@@ -71,6 +85,17 @@ private:
     VkSampleCountFlagBits m_samples = VK_SAMPLE_COUNT_1_BIT;
     bool m_depthTest = true;
     bool m_depthWrite = true;
+    VkCompareOp m_depthCompareOp = VK_COMPARE_OP_LESS;
+    bool m_depthClampEnable = false;
+    bool m_rasterizerDiscardEnable = false;
+    bool m_depthBiasEnable = false;
+    bool m_sampleShadingEnable = false;
+
+    std::vector<ColorBlendAttachment> m_colorBlendAttachments;
+    std::vector<VkDynamicState> m_dynamicStates = {
+        VK_DYNAMIC_STATE_VIEWPORT,
+        VK_DYNAMIC_STATE_SCISSOR
+    };
 };
 
 } // namespace kazu

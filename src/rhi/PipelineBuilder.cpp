@@ -109,6 +109,49 @@ PipelineBuilder& PipelineBuilder::depthWrite(bool enable) {
     return *this;
 }
 
+PipelineBuilder& PipelineBuilder::depthCompareOp(VkCompareOp op) {
+    m_depthCompareOp = op;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::depthClampEnable(bool enable) {
+    m_depthClampEnable = enable;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::rasterizerDiscardEnable(bool enable) {
+    m_rasterizerDiscardEnable = enable;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::depthBiasEnable(bool enable) {
+    m_depthBiasEnable = enable;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::sampleShadingEnable(bool enable) {
+    m_sampleShadingEnable = enable;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::colorBlendAttachment(uint32_t index, const ColorBlendAttachment& config) {
+    if (index >= m_colorBlendAttachments.size()) {
+        m_colorBlendAttachments.resize(index + 1);
+    }
+    m_colorBlendAttachments[index] = config;
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::dynamicState(VkDynamicState state) {
+    m_dynamicStates.push_back(state);
+    return *this;
+}
+
+PipelineBuilder& PipelineBuilder::clearDynamicStates() {
+    m_dynamicStates.clear();
+    return *this;
+}
+
 PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     if (m_shaderPaths.empty()) {
         fatalError("PipelineBuilder: no shaders specified");
@@ -211,7 +254,16 @@ PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     state.frontFace = m_frontFace;
     state.polygonMode = m_polygonMode;
     state.lineWidth = m_lineWidth;
+    state.depthClampEnable = m_depthClampEnable;
+    state.rasterizerDiscardEnable = m_rasterizerDiscardEnable;
+    state.depthBiasEnable = m_depthBiasEnable;
     state.samples = m_samples;
+    state.sampleShadingEnable = m_sampleShadingEnable;
+    state.depthTest = m_depthTest;
+    state.depthWrite = m_depthWrite;
+    state.depthCompareOp = m_depthCompareOp;
+    state.colorBlendAttachments = m_colorBlendAttachments;
+    state.dynamicStates = m_dynamicStates;
     state.vertexBindings = vertexBindings;
     state.vertexAttributes = vertexAttributes;
     state.descriptorSetLayout = dslHandle;
@@ -245,17 +297,17 @@ PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
 
     VkPipelineRasterizationStateCreateInfo rasterizer{};
     rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    rasterizer.depthClampEnable = VK_FALSE;
-    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.depthClampEnable = m_depthClampEnable ? VK_TRUE : VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = m_rasterizerDiscardEnable ? VK_TRUE : VK_FALSE;
     rasterizer.polygonMode = m_polygonMode;
     rasterizer.lineWidth = m_lineWidth;
     rasterizer.cullMode = m_cullMode;
     rasterizer.frontFace = m_frontFace;
-    rasterizer.depthBiasEnable = VK_FALSE;
+    rasterizer.depthBiasEnable = m_depthBiasEnable ? VK_TRUE : VK_FALSE;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.sampleShadingEnable = m_sampleShadingEnable ? VK_TRUE : VK_FALSE;
     multisampling.rasterizationSamples = m_samples;
 
     // Determine color attachment count from fragment shader reflection (MRT support)
@@ -268,32 +320,38 @@ PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
         }
     }
 
-    std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments(colorAttachmentCount);
-    for (auto& att : colorBlendAttachments) {
-        att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT
-                           | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-        att.blendEnable = VK_FALSE;
+    std::vector<VkPipelineColorBlendAttachmentState> vkColorBlendAttachments(colorAttachmentCount);
+    for (uint32_t i = 0; i < colorAttachmentCount; ++i) {
+        const auto& src = (i < m_colorBlendAttachments.size()) ? m_colorBlendAttachments[i] : ColorBlendAttachment{};
+        auto& dst = vkColorBlendAttachments[i];
+        dst.blendEnable = src.blendEnable ? VK_TRUE : VK_FALSE;
+        dst.srcColorBlendFactor = src.srcColorBlendFactor;
+        dst.dstColorBlendFactor = src.dstColorBlendFactor;
+        dst.colorBlendOp = src.colorBlendOp;
+        dst.srcAlphaBlendFactor = src.srcAlphaBlendFactor;
+        dst.dstAlphaBlendFactor = src.dstAlphaBlendFactor;
+        dst.alphaBlendOp = src.alphaBlendOp;
+        dst.colorWriteMask = src.colorWriteMask;
     }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
     colorBlending.attachmentCount = colorAttachmentCount;
-    colorBlending.pAttachments = colorBlendAttachments.data();
+    colorBlending.pAttachments = vkColorBlendAttachments.data();
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
     depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depthStencil.depthTestEnable = m_depthTest ? VK_TRUE : VK_FALSE;
     depthStencil.depthWriteEnable = m_depthWrite ? VK_TRUE : VK_FALSE;
-    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthCompareOp = m_depthCompareOp;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamicState{};
     dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-    dynamicState.dynamicStateCount = 2;
-    dynamicState.pDynamicStates = dynamicStates;
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(m_dynamicStates.size());
+    dynamicState.pDynamicStates = m_dynamicStates.empty() ? nullptr : m_dynamicStates.data();
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
