@@ -11,7 +11,6 @@ SyncObjects::SyncObjects(Context& ctx, uint32_t frameCount, uint32_t imageCount)
     : m_ctx(&ctx)
 {
     m_imageAvailable.resize(frameCount);
-    m_renderFinished.resize(frameCount);
     m_inFlight.resize(frameCount);
     m_imageRenderFinished.resize(imageCount);
 
@@ -24,7 +23,6 @@ SyncObjects::SyncObjects(Context& ctx, uint32_t frameCount, uint32_t imageCount)
 
     for (uint32_t i = 0; i < frameCount; ++i) {
         VK_CHECK(vkCreateSemaphore(m_ctx->device(), &semaphoreInfo, nullptr, &m_imageAvailable[i]));
-        VK_CHECK(vkCreateSemaphore(m_ctx->device(), &semaphoreInfo, nullptr, &m_renderFinished[i]));
         VK_CHECK(vkCreateFence(m_ctx->device(), &fenceInfo, nullptr, &m_inFlight[i]));
     }
 
@@ -42,9 +40,6 @@ SyncObjects::~SyncObjects() {
     for (auto& fence : m_inFlight) {
         if (fence != VK_NULL_HANDLE) vkDestroyFence(m_ctx->device(), fence, nullptr);
     }
-    for (auto& sem : m_renderFinished) {
-        if (sem != VK_NULL_HANDLE) vkDestroySemaphore(m_ctx->device(), sem, nullptr);
-    }
     for (auto& sem : m_imageAvailable) {
         if (sem != VK_NULL_HANDLE) vkDestroySemaphore(m_ctx->device(), sem, nullptr);
     }
@@ -53,7 +48,6 @@ SyncObjects::~SyncObjects() {
 SyncObjects::SyncObjects(SyncObjects&& other) noexcept
     : m_ctx(other.m_ctx)
     , m_imageAvailable(std::move(other.m_imageAvailable))
-    , m_renderFinished(std::move(other.m_renderFinished))
     , m_inFlight(std::move(other.m_inFlight))
     , m_imageRenderFinished(std::move(other.m_imageRenderFinished))
 {}
@@ -63,7 +57,6 @@ SyncObjects& SyncObjects::operator=(SyncObjects&& other) noexcept {
         this->~SyncObjects();
         m_ctx = other.m_ctx;
         m_imageAvailable = std::move(other.m_imageAvailable);
-        m_renderFinished = std::move(other.m_renderFinished);
         m_inFlight = std::move(other.m_inFlight);
         m_imageRenderFinished = std::move(other.m_imageRenderFinished);
     }
@@ -72,10 +65,6 @@ SyncObjects& SyncObjects::operator=(SyncObjects&& other) noexcept {
 
 VkSemaphore SyncObjects::imageAvailable(uint32_t frame) const {
     return m_imageAvailable[frame];
-}
-
-VkSemaphore SyncObjects::renderFinished(uint32_t frame) const {
-    return m_renderFinished[frame];
 }
 
 VkFence SyncObjects::inFlight(uint32_t frame) const {

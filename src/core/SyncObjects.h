@@ -23,7 +23,6 @@ public:
     SyncObjects& operator=(SyncObjects&& other) noexcept;
 
     VkSemaphore imageAvailable(uint32_t frame) const;
-    VkSemaphore renderFinished(uint32_t frame) const;
     VkFence inFlight(uint32_t frame) const;
     VkSemaphore imageRenderFinished(uint32_t imageIndex) const;
 
@@ -34,7 +33,6 @@ public:
 private:
     Context* m_ctx = nullptr;
     std::vector<VkSemaphore> m_imageAvailable;
-    std::vector<VkSemaphore> m_renderFinished;
     std::vector<VkFence> m_inFlight;
     std::vector<VkSemaphore> m_imageRenderFinished;
 };
