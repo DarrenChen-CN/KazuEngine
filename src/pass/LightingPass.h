@@ -1,7 +1,8 @@
 // ============================================================================
 // KazuEngine - Pass Layer: Lighting Pass
 //
-// Full-screen quad lighting: samples GBuffer Albedo/Normal, writes to swapchain.
+// Full-screen quad lighting: samples GBuffer Albedo/Normal/Depth,
+// writes to imported swapchain image via RenderGraph.
 // ============================================================================
 
 #pragma once
@@ -11,8 +12,7 @@
 
 namespace kazu {
 
-class PipelineCache;
-class PipelineLayout;
+class ShaderEffect;
 
 class LightingPass : public Pass {
 public:
@@ -28,6 +28,11 @@ public:
     void setCurrentImageIndex(uint32_t idx) { m_currentImageIndex = idx; }
     void setDisplayMode(int mode) { m_displayMode = mode; }
 
+    // Set the imported swapchain resource handle (called before declare)
+    void setSwapchainHandle(RenderGraph::ResourceHandle handle) {
+        m_swapchainHandle = handle;
+    }
+
     // Called by RenderGraph execute lambda
     void execute(VkCommandBuffer cmd);
 
@@ -37,6 +42,9 @@ public:
                    RenderGraph::ResourceHandle depth);
 
 private:
+    void createRenderPassAndFramebuffers();
+    void destroyRenderPassAndFramebuffers();
+
     RHI*   m_rhi   = nullptr;
     Scene* m_scene = nullptr;
     Camera* m_camera = nullptr;
@@ -44,19 +52,20 @@ private:
     RenderGraph::ResourceHandle m_albedoHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_normalHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_depthHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;
 
-    VkPipeline       m_pipeline       = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    ShaderEffect*    m_effect         = nullptr;
+
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet  m_descriptorSet  = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkSampler        m_sampler        = VK_NULL_HANDLE;
 
+    VkRenderPass  m_renderPass = VK_NULL_HANDLE;
+    std::vector<VkFramebuffer> m_framebuffers;
+
     uint32_t m_currentImageIndex = 0;
     int      m_displayMode = 0;
-
-    std::unique_ptr<PipelineLayout> m_pipelineLayoutObj;
-    std::unique_ptr<PipelineCache>  m_pipelineCache;
 };
 
 } // namespace kazu

@@ -17,13 +17,11 @@ Swapchain::Swapchain(Context& ctx, GLFWwindow* window, VkRenderPass renderPass)
     : m_ctx(&ctx)
     , m_window(window)
 {
+    (void)renderPass;
     createSurface();
     createSwapchain();
     createImageViews();
     createDepthResources();
-    if (renderPass != VK_NULL_HANDLE) {
-        createFramebuffers(renderPass);
-    }
 }
 
 Swapchain::~Swapchain() {
@@ -41,7 +39,6 @@ Swapchain::Swapchain(Swapchain&& other) noexcept
     , m_swapchain(other.m_swapchain)
     , m_images(std::move(other.m_images))
     , m_imageViews(std::move(other.m_imageViews))
-    , m_framebuffers(std::move(other.m_framebuffers))
     , m_format(other.m_format)
     , m_extent(other.m_extent)
     , m_depthFormat(other.m_depthFormat)
@@ -66,7 +63,6 @@ Swapchain& Swapchain::operator=(Swapchain&& other) noexcept {
         m_swapchain = other.m_swapchain;
         m_images = std::move(other.m_images);
         m_imageViews = std::move(other.m_imageViews);
-        m_framebuffers = std::move(other.m_framebuffers);
         m_format = other.m_format;
         m_extent = other.m_extent;
         m_depthFormat = other.m_depthFormat;
@@ -207,37 +203,8 @@ void Swapchain::createDepthResources() {
     VK_CHECK(vkCreateImageView(m_ctx->device(), &viewInfo, nullptr, &m_depthImageView));
 }
 
-void Swapchain::createFramebuffers(VkRenderPass renderPass) {
-    // Clean up old framebuffers if any
-    for (auto framebuffer : m_framebuffers) {
-        vkDestroyFramebuffer(m_ctx->device(), framebuffer, nullptr);
-    }
-    m_framebuffers.clear();
-
-    m_framebuffers.resize(m_imageViews.size());
-    for (size_t i = 0; i < m_imageViews.size(); ++i) {
-        VkImageView attachments[] = { m_imageViews[i], m_depthImageView };
-
-        VkFramebufferCreateInfo framebufferInfo{};
-        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = renderPass;
-        framebufferInfo.attachmentCount = 2;
-        framebufferInfo.pAttachments = attachments;
-        framebufferInfo.width = m_extent.width;
-        framebufferInfo.height = m_extent.height;
-        framebufferInfo.layers = 1;
-
-        VK_CHECK(vkCreateFramebuffer(m_ctx->device(), &framebufferInfo, nullptr, &m_framebuffers[i]));
-    }
-}
-
 void Swapchain::cleanup() {
     if (!m_ctx) return;
-
-    for (auto framebuffer : m_framebuffers) {
-        vkDestroyFramebuffer(m_ctx->device(), framebuffer, nullptr);
-    }
-    m_framebuffers.clear();
 
     if (m_depthImageView != VK_NULL_HANDLE) {
         vkDestroyImageView(m_ctx->device(), m_depthImageView, nullptr);
@@ -270,13 +237,8 @@ void Swapchain::cleanup() {
 // ============================================================================
 
 void Swapchain::recreate(VkRenderPass renderPass) {
+    (void)renderPass;
     vkDeviceWaitIdle(m_ctx->device());
-
-    // Destroy swapchain-dependent resources, but keep surface
-    for (auto framebuffer : m_framebuffers) {
-        vkDestroyFramebuffer(m_ctx->device(), framebuffer, nullptr);
-    }
-    m_framebuffers.clear();
 
     for (auto imageView : m_imageViews) {
         vkDestroyImageView(m_ctx->device(), imageView, nullptr);
@@ -293,7 +255,6 @@ void Swapchain::recreate(VkRenderPass renderPass) {
     createSwapchain();
     createImageViews();
     createDepthResources();
-    createFramebuffers(renderPass);
     spdlog::info("Swapchain recreated: {}x{}", m_extent.width, m_extent.height);
 }
 
@@ -376,5 +337,3 @@ VkExtent2D Swapchain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& caps) {
 }
 
 } // namespace kazu
-
-

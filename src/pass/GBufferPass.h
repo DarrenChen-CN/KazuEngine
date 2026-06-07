@@ -12,8 +12,7 @@
 
 namespace kazu {
 
-class PipelineCache;
-class PipelineLayout;
+class ShaderEffect;
 
 class GBufferPass : public Pass {
 public:
@@ -34,6 +33,9 @@ public:
     RenderGraph::ResourceHandle materialHandle() const { return m_materialHandle; }
     RenderGraph::ResourceHandle depthHandle() const   { return m_depthHandle; }
 
+    VkRenderPass renderPass() const { return m_renderPass; }
+    ShaderEffect* shaderEffect() const { return m_effect; }
+
 private:
     RHI*   m_rhi   = nullptr;
     Scene* m_scene = nullptr;
@@ -46,13 +48,7 @@ private:
 
     VkRenderPass     m_renderPass     = VK_NULL_HANDLE;
     VkFramebuffer    m_framebuffer    = VK_NULL_HANDLE;
-    VkPipeline       m_pipeline       = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-
-    // RAII owners: PipelineLayout must be declared BEFORE PipelineCache
-    // (destruction order: Cache first, then Layout — Cache depends on Layout)
-    std::unique_ptr<PipelineLayout> m_pipelineLayoutObj;
-    std::unique_ptr<PipelineCache>  m_pipelineCache;
+    ShaderEffect*    m_effect         = nullptr;
 };
 
 } // namespace kazu

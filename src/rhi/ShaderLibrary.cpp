@@ -7,6 +7,7 @@
 #include <spirv_reflect.h>
 #include <spdlog/spdlog.h>
 #include <fstream>
+#include <algorithm>
 
 namespace kazu {
 
@@ -175,6 +176,11 @@ ShaderReflection ShaderLibrary::reflectSPIRV(const std::vector<char>& code) {
                 attr.name = in->name ? in->name : "";
                 refl.vertexInputs.push_back(attr);
             }
+            // Sort by location to match C++ Vertex struct memory layout
+            std::sort(refl.vertexInputs.begin(), refl.vertexInputs.end(),
+                [](const ShaderVertexInputAttribute& a, const ShaderVertexInputAttribute& b) {
+                    return a.location < b.location;
+                });
         }
     }
 

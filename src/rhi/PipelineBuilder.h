@@ -64,6 +64,11 @@ public:
     PipelineBuilder& dynamicState(VkDynamicState state);
     PipelineBuilder& clearDynamicStates();
 
+    // Explicit vertex input layout (overrides SPIR-V reflection).
+    // Use this when the C++ struct layout must exactly match the pipeline.
+    PipelineBuilder& vertexInput(const VkVertexInputBindingDescription& binding,
+                                 const std::vector<VkVertexInputAttributeDescription>& attributes);
+
     // Build: checks PipelineCache first; on miss creates DSL (via cache) + PL + GP
     PipelineBuildResult build(PipelineCache& cache);
 
@@ -96,6 +101,10 @@ private:
         VK_DYNAMIC_STATE_VIEWPORT,
         VK_DYNAMIC_STATE_SCISSOR
     };
+
+    // Explicit vertex input (optional; if empty, falls back to SPIR-V reflection)
+    std::vector<VkVertexInputBindingDescription> m_explicitVertexBindings;
+    std::vector<VkVertexInputAttributeDescription> m_explicitVertexAttributes;
 };
 
 } // namespace kazu

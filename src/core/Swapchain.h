@@ -38,8 +38,9 @@ public:
     VkFormat format() const { return m_format; }
     VkExtent2D extent() const { return m_extent; }
     uint32_t imageCount() const { return static_cast<uint32_t>(m_images.size()); }
-    VkFramebuffer framebuffer(uint32_t index) const { return m_framebuffers[index]; }
     VkImageView imageView(uint32_t index) const { return m_imageViews[index]; }
+    VkImage image(uint32_t index) const { return m_images[index]; }
+    VkImageView depthImageView() const { return m_depthImageView; }
     VkSwapchainKHR handle() const { return m_swapchain; }
 
 private:
@@ -49,7 +50,6 @@ private:
     VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
     std::vector<VkImage> m_images;
     std::vector<VkImageView> m_imageViews;
-    std::vector<VkFramebuffer> m_framebuffers;
     VkFormat m_format = VK_FORMAT_UNDEFINED;
     VkExtent2D m_extent = {};
 
@@ -69,8 +69,6 @@ private:
     void createSwapchain();
     void createImageViews();
     void createDepthResources();
-public:
-    void createFramebuffers(VkRenderPass renderPass);
 private:
     void cleanup();
 

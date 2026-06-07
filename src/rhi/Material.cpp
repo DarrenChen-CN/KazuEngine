@@ -1,151 +1,150 @@
 // ============================================================================
-// KazuEngine - RHI Layer: Material (Implementation)
+// KazuEngine - RHI Layer: Material System (Implementation)
 // ============================================================================
 
 #include "Material.h"
 #include "../core/Utils.h"
 #include <spdlog/spdlog.h>
-#include <map>
 
 namespace kazu {
 
-Material::Material(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLayoutCache& dslCache)
-    : m_ctx(&ctx), m_shaderLib(&shaderLib), m_dslCache(&dslCache) {}
+// ============================================================================
+// Material base helpers
+// ============================================================================
 
-Material::~Material() {
-    // DescriptorSet is pool-managed; pool destruction frees it automatically.
-    // DescriptorSetLayout is cache-managed.
-}
-
-Material::Material(Material&& other) noexcept
-    : m_ctx(other.m_ctx), m_shaderLib(other.m_shaderLib), m_dslCache(other.m_dslCache),
-      m_vertPath(std::move(other.m_vertPath)), m_fragPath(std::move(other.m_fragPath)),
-      m_textures(std::move(other.m_textures)),
-      m_descriptorSetLayout(other.m_descriptorSetLayout),
-      m_descriptorPool(std::move(other.m_descriptorPool)),
-      m_descriptorSet(other.m_descriptorSet) {
-    other.m_descriptorSetLayout = VK_NULL_HANDLE;
-    other.m_descriptorSet = VK_NULL_HANDLE;
-}
-
-Material& Material::operator=(Material&& other) noexcept {
-    if (this != &other) {
-        m_ctx = other.m_ctx;
-        m_shaderLib = other.m_shaderLib;
-        m_dslCache = other.m_dslCache;
-        m_vertPath = std::move(other.m_vertPath);
-        m_fragPath = std::move(other.m_fragPath);
-        m_textures = std::move(other.m_textures);
-        m_descriptorSetLayout = other.m_descriptorSetLayout;
-        m_descriptorPool = std::move(other.m_descriptorPool);
-        m_descriptorSet = other.m_descriptorSet;
-        other.m_descriptorSetLayout = VK_NULL_HANDLE;
-        other.m_descriptorSet = VK_NULL_HANDLE;
-    }
-    return *this;
-}
-
-void Material::setShaders(const std::string& vertPath, const std::string& fragPath) {
-    m_vertPath = vertPath;
-    m_fragPath = fragPath;
-}
-
-void Material::setTexture(uint32_t binding, Texture& texture) {
-    for (auto& [b, tex] : m_textures) {
-        if (b == binding) {
-            tex = &texture;
-            return;
-        }
-    }
-    m_textures.emplace_back(binding, &texture);
-}
-
-void Material::build() {
-    if (m_vertPath.empty() || m_fragPath.empty()) {
-        fatalError("Material: shaders not set");
-    }
-
-    // Ensure shaders are loaded (and cached in ShaderLibrary)
-    m_shaderLib->load(m_vertPath);
-    m_shaderLib->load(m_fragPath);
-
-    // Collect reflections and merge descriptor bindings
-    const auto& vertRefl = m_shaderLib->getReflection(m_vertPath);
-    const auto& fragRefl = m_shaderLib->getReflection(m_fragPath);
-
-    std::map<std::pair<uint32_t, uint32_t>, ShaderDescriptorBinding> merged;
-    for (const auto& refl : {vertRefl, fragRefl}) {
-        for (const auto& b : refl.descriptorBindings) {
-            auto key = std::make_pair(b.set, b.binding);
-            auto it = merged.find(key);
-            if (it == merged.end()) {
-                merged[key] = b;
-            } else {
-                it->second.stageFlags |= b.stageFlags;
-            }
-        }
-    }
-
-    // Convert to VkDescriptorSetLayoutBinding
-    std::vector<VkDescriptorSetLayoutBinding> vkBindings;
-    vkBindings.reserve(merged.size());
-    std::map<VkDescriptorType, uint32_t> typeCounts;
-    for (const auto& [key, b] : merged) {
-        VkDescriptorSetLayoutBinding vkBinding{};
-        vkBinding.binding = b.binding;
-        vkBinding.descriptorType = b.descriptorType;
-        vkBinding.descriptorCount = b.count;
-        vkBinding.stageFlags = b.stageFlags;
-        vkBinding.pImmutableSamplers = nullptr;
-        vkBindings.push_back(vkBinding);
-        typeCounts[b.descriptorType] += b.count;
-    }
-
-    // Get or create DescriptorSetLayout via cache
-    m_descriptorSetLayout = m_dslCache->getOrCreate(vkBindings);
-
-    // Create DescriptorPool sized to this material's needs
-    std::vector<VkDescriptorPoolSize> poolSizes;
-    poolSizes.reserve(typeCounts.size());
-    for (const auto& [type, count] : typeCounts) {
-        poolSizes.push_back({type, count});
-    }
-
+std::unique_ptr<DescriptorPool> Material::createPool(Context& ctx,
+    const std::vector<VkDescriptorPoolSize>& sizes) {
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
-    poolInfo.pPoolSizes = poolSizes.data();
-    m_descriptorPool = std::make_unique<DescriptorPool>(*m_ctx, poolInfo);
+    poolInfo.poolSizeCount = static_cast<uint32_t>(sizes.size());
+    poolInfo.pPoolSizes = sizes.data();
+    return std::make_unique<DescriptorPool>(ctx, poolInfo);
+}
 
-    // Allocate DescriptorSet
-    m_descriptorSet = m_descriptorPool->allocate(m_descriptorSetLayout);
+// ============================================================================
+// PBRMaterial
+// ============================================================================
 
-    // Update DescriptorSet with bound textures
-    std::vector<VkWriteDescriptorSet> writes;
-    writes.reserve(m_textures.size());
+void PBRMaterial::build(Context& ctx, DescriptorSetLayoutCache& dslCache) {
+    if (!m_effect) {
+        fatalError("PBRMaterial::build: effect not set");
+    }
+
+    m_textures = {albedoMap, normalMap, metallicRoughnessMap, aoMap};
+
+    // Count active texture bindings
+    std::vector<VkDescriptorPoolSize> poolSizes;
     std::vector<VkDescriptorImageInfo> imageInfos;
-    imageInfos.reserve(m_textures.size());
+    std::vector<VkWriteDescriptorSet> writes;
 
-    for (const auto& [binding, texture] : m_textures) {
-        imageInfos.push_back(texture->descriptorInfo());
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = m_descriptorSet;
-        write.dstBinding = binding;
-        write.dstArrayElement = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfos.back();
-        writes.push_back(write);
+    for (uint32_t i = 0; i < 4; ++i) {
+        if (m_textures[i]) {
+            imageInfos.push_back(m_textures[i]->descriptorInfo());
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstBinding = i;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &imageInfos.back();
+            writes.push_back(write);
+        }
     }
 
     if (!writes.empty()) {
-        vkUpdateDescriptorSets(m_ctx->device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        VkDescriptorPoolSize poolSize{};
+        poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSize.descriptorCount = static_cast<uint32_t>(writes.size());
+        poolSizes.push_back(poolSize);
+
+        m_pool = createPool(ctx, poolSizes);
+
+        VkDescriptorSetLayout dsl = m_effect->descriptorSetLayout();
+        m_descriptorSet = m_pool->allocate(dsl);
+
+        for (auto& write : writes) {
+            write.dstSet = m_descriptorSet;
+        }
+        vkUpdateDescriptorSets(ctx.device(), static_cast<uint32_t>(writes.size()),
+                               writes.data(), 0, nullptr);
     }
 
-    spdlog::info("[Material] Built: shaders=[{}, {}], bindings={}, textures={}",
-                 m_vertPath, m_fragPath, vkBindings.size(), m_textures.size());
+    spdlog::info("[PBRMaterial] Built: effect={}, textures={}",
+                 m_effect ? "ok" : "null", writes.size());
+}
+
+void PBRMaterial::bind(VkCommandBuffer cmd, VkPipelineLayout layout) {
+    spdlog::debug("[PBRMaterial::bind] descriptorSet={}, layout={}",
+                  reinterpret_cast<void*>(m_descriptorSet),
+                  reinterpret_cast<void*>(layout));
+    if (m_descriptorSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                layout, 0, 1, &m_descriptorSet, 0, nullptr);
+    } else {
+        spdlog::warn("[PBRMaterial::bind] descriptorSet is NULL!");
+    }
+}
+
+// ============================================================================
+// MaterialCache
+// ============================================================================
+
+bool MaterialCache::PBRKey::operator==(const PBRKey& o) const {
+    return effect == o.effect
+        && textures == o.textures
+        && baseColorFactor == o.baseColorFactor
+        && metallic == o.metallic
+        && roughness == o.roughness
+        && emissiveStrength == o.emissiveStrength
+        && doubleSided == o.doubleSided;
+}
+
+size_t MaterialCache::PBRKeyHash::operator()(const PBRKey& k) const {
+    size_t h = reinterpret_cast<size_t>(k.effect);
+    for (auto* tex : k.textures) {
+        h ^= reinterpret_cast<size_t>(tex) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    }
+    h ^= std::hash<float>{}(k.baseColorFactor.x) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<float>{}(k.baseColorFactor.y) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<float>{}(k.baseColorFactor.z) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<float>{}(k.baseColorFactor.w) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<float>{}(k.metallic) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<float>{}(k.roughness) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<float>{}(k.emissiveStrength) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    h ^= std::hash<bool>{}(k.doubleSided) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    return h;
+}
+
+Material* MaterialCache::getOrCreate(std::unique_ptr<Material> prototype) {
+    if (!prototype) return nullptr;
+
+    auto* pbr = dynamic_cast<PBRMaterial*>(prototype.get());
+    if (!pbr) {
+        // Non-PBR materials: no dedup for now
+        return prototype.release();
+    }
+
+    PBRKey key;
+    key.effect = pbr->effect();
+    key.textures = pbr->textureSlots();
+    key.baseColorFactor = pbr->baseColorFactor;
+    key.metallic = pbr->metallic;
+    key.roughness = pbr->roughness;
+    key.emissiveStrength = pbr->emissiveStrength;
+    key.doubleSided = pbr->doubleSided;
+
+    auto it = m_pbrCache.find(key);
+    if (it != m_pbrCache.end()) {
+        return it->second.get();
+    }
+
+    Material* raw = prototype.get();
+    m_pbrCache.emplace(key, std::move(prototype));
+    return raw;
+}
+
+void MaterialCache::clear() {
+    m_pbrCache.clear();
 }
 
 } // namespace kazu

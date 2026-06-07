@@ -5,6 +5,8 @@
 #include "Scene.h"
 #include "../core/Path.h"
 #include "../core/Utils.h"
+#include "../rhi/ShaderEffect.h"
+#include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
 #include <fastgltf/core.hpp>
 #include <fastgltf/types.hpp>
@@ -18,8 +20,7 @@ using json = nlohmann::json;
 
 namespace kazu {
 
-void Scene::loadFromFile(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLayoutCache& dslCache,
-                         const std::string& scenePath) {
+void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     std::ifstream file(scenePath);
     if (!file.is_open()) {
         fatalError("Failed to open scene file: " + scenePath);
@@ -60,34 +61,63 @@ void Scene::loadFromFile(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLa
         if (path.empty()) continue;
 
         if (format == "obj") {
-            loadObjModel(ctx, shaderLib, dslCache, path, scale);
+            loadObjModel(ctx, path, scale);
         } else if (format == "gltf" || format == "glb") {
-            loadGltfModel(ctx, shaderLib, dslCache, path, scale);
+            loadGltfModel(ctx, path, scale);
         } else {
             spdlog::warn("[Scene] Unknown model format: {}", format);
         }
     }
 
-    spdlog::info("[Scene] Loaded {} model(s) from {}", m_models.size(), scenePath);
+    spdlog::info("[Scene] Loaded {} model(s) from {}", m_instances.size(), scenePath);
 }
 
-void Scene::draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout) {
-    for (auto& model : m_models) {
-        if (model.material && model.material->descriptorSet() != VK_NULL_HANDLE) {
-            VkDescriptorSet ds = model.material->descriptorSet();
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
-                                    0, 1, &ds, 0, nullptr);
+void Scene::buildMaterials(Context& ctx, ShaderEffect* effect,
+                           DescriptorSetLayoutCache& dslCache) {
+    for (auto& inst : m_instances) {
+        if (inst.material != nullptr) continue;  // already built
+
+        auto mat = std::make_unique<PBRMaterial>();
+        mat->setEffect(effect);
+        mat->albedoMap = inst.pendingAlbedoMap;
+        mat->baseColorFactor = inst.pendingBaseColorFactor;
+        mat->metallic = inst.pendingMetallic;
+        mat->roughness = inst.pendingRoughness;
+        mat->build(ctx, dslCache);
+
+        Material* sharedMat = m_materialCache.getOrCreate(std::move(mat));
+        inst.material = sharedMat;
+    }
+
+    spdlog::info("[Scene] Built {} material(s)", m_instances.size());
+}
+
+void Scene::draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
+                    const glm::mat4& viewProj, const glm::vec4& lightPos,
+                    const glm::vec4& viewPos, int displayMode) {
+    spdlog::debug("[Scene::draw] {} instances", m_instances.size());
+    for (auto& inst : m_instances) {
+        GBufferPush push{};
+        push.mvp = viewProj * inst.transform;
+        push.lightPos = lightPos;
+        push.viewPos = viewPos;
+        push.displayMode = displayMode;
+        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(GBufferPush), &push);
+
+        spdlog::debug("[Scene::draw] mesh={}, material={}",
+                      reinterpret_cast<void*>(inst.mesh),
+                      reinterpret_cast<void*>(inst.material));
+        if (inst.material) {
+            inst.material->bind(cmd, pipelineLayout);
         }
-        if (model.mesh) {
-            model.mesh->draw(cmd);
+        if (inst.mesh) {
+            inst.mesh->draw(cmd);
         }
     }
 }
 
-void Scene::loadObjModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLayoutCache& dslCache,
-                         const std::string& path, float scale) {
-    auto mesh = std::make_unique<Mesh>(Mesh::loadObj(ctx, path));
-
+void Scene::loadObjModel(Context& ctx, const std::string& path, float scale) {
     // Try to load texture from model directory
     std::filesystem::path modelPath(path);
     std::filesystem::path dir = modelPath.parent_path();
@@ -100,24 +130,20 @@ void Scene::loadObjModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLa
         }
     }
 
-    ModelInstance instance;
-    instance.mesh = std::move(mesh);
-    instance.material = std::make_unique<Material>(ctx, shaderLib, dslCache);
-    instance.material->setShaders(
-        kazu::Path::resolveShader("triangle.vert.spv"),
-        kazu::Path::resolveShader("triangle.frag.spv"));
+    Mesh* meshPtr = getOrLoadMesh(ctx, path);
+    Texture* texturePtr = getOrLoadTexture(ctx, texturePath);
 
-    if (!texturePath.empty()) {
-        instance.texture = std::make_unique<Texture>(ctx, texturePath);
-        instance.material->setTexture(0, *instance.texture);
-    }
-    instance.material->build();
-
-    m_models.push_back(std::move(instance));
+    ModelInstance inst;
+    inst.mesh = meshPtr;
+    inst.transform = glm::scale(glm::mat4(1.0f), glm::vec3(scale));
+    inst.pendingAlbedoMap = texturePtr;
+    inst.pendingBaseColorFactor = glm::vec4(1.0f);
+    inst.pendingMetallic = 0.0f;
+    inst.pendingRoughness = 1.0f;
+    m_instances.push_back(inst);
 }
 
-void Scene::loadGltfModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLayoutCache& dslCache,
-                          const std::string& path, float scale) {
+void Scene::loadGltfModel(Context& ctx, const std::string& path, float scale) {
     fastgltf::Parser parser;
 
     auto gltfFile = fastgltf::MappedGltfFile::FromPath(path);
@@ -148,8 +174,10 @@ void Scene::loadGltfModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetL
     }
 
     // Load all meshes and their primitives
-    for (auto& mesh : asset.meshes) {
-        for (auto& primitive : mesh.primitives) {
+    for (size_t meshIdx = 0; meshIdx < asset.meshes.size(); ++meshIdx) {
+        auto& mesh = asset.meshes[meshIdx];
+        for (size_t primIdx = 0; primIdx < mesh.primitives.size(); ++primIdx) {
+            auto& primitive = mesh.primitives[primIdx];
             auto* posIt = primitive.findAttribute("POSITION");
             if (posIt == primitive.attributes.end()) continue;
             auto& posAccessor = asset.accessors[posIt->accessorIndex];
@@ -166,7 +194,7 @@ void Scene::loadGltfModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetL
             vertices.resize(posAccessor.count);
 
             fastgltf::iterateAccessorWithIndex<glm::vec3>(asset, posAccessor, [&](glm::vec3 pos, std::size_t idx) {
-                vertices[idx].position = pos * scale;
+                vertices[idx].position = pos;
             });
 
             fastgltf::iterateAccessorWithIndex<glm::vec3>(asset, normalAccessor, [&](glm::vec3 normal, std::size_t idx) {
@@ -199,10 +227,12 @@ void Scene::loadGltfModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetL
                 for (uint32_t i = 0; i < vertices.size(); ++i) indices[i] = i;
             }
 
-            auto meshObj = std::make_unique<Mesh>(ctx, vertices, indices);
-
             // Load material / texture
-            std::unique_ptr<Texture> texture;
+            std::string texturePath;
+            glm::vec4 baseColorFactor = glm::vec4(1.0f);
+            float metallic = 0.0f;
+            float roughness = 1.0f;
+
             if (primitive.materialIndex.has_value()) {
                 auto& material = asset.materials[primitive.materialIndex.value()];
                 if (material.pbrData.baseColorTexture.has_value()) {
@@ -211,30 +241,79 @@ void Scene::loadGltfModel(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetL
                     if (textureAsset.imageIndex.has_value()) {
                         auto& image = asset.images[textureAsset.imageIndex.value()];
                         if (auto* uriPtr = std::get_if<fastgltf::sources::URI>(&image.data)) {
-                            std::filesystem::path texturePath = parentPath / std::string(uriPtr->uri.string());
-                            if (std::filesystem::exists(texturePath)) {
-                                texture = std::make_unique<Texture>(ctx, texturePath.string());
+                            std::filesystem::path tp = parentPath / std::string(uriPtr->uri.string());
+                            if (std::filesystem::exists(tp)) {
+                                texturePath = tp.string();
                             }
                         }
                     }
                 }
+                baseColorFactor = glm::vec4(
+                    material.pbrData.baseColorFactor.x(),
+                    material.pbrData.baseColorFactor.y(),
+                    material.pbrData.baseColorFactor.z(),
+                    material.pbrData.baseColorFactor.w());
+                metallic = material.pbrData.metallicFactor;
+                roughness = material.pbrData.roughnessFactor;
             }
 
-            ModelInstance instance;
-            instance.mesh = std::move(meshObj);
-            instance.material = std::make_unique<Material>(ctx, shaderLib, dslCache);
-            instance.material->setShaders(
-                kazu::Path::resolveShader("triangle.vert.spv"),
-                kazu::Path::resolveShader("triangle.frag.spv"));
-            if (texture) {
-                instance.texture = std::move(texture);
-                instance.material->setTexture(0, *instance.texture);
-            }
-            instance.material->build();
+            std::string meshKey = path + "#" + std::to_string(meshIdx) + ":" + std::to_string(primIdx);
+            Mesh* meshPtr = getOrLoadMesh(ctx, meshKey, vertices, indices);
+            Texture* texturePtr = getOrLoadTexture(ctx, texturePath);
 
-            m_models.push_back(std::move(instance));
+            ModelInstance inst;
+            inst.mesh = meshPtr;
+            inst.transform = glm::scale(glm::mat4(1.0f), glm::vec3(scale));
+            inst.pendingAlbedoMap = texturePtr;
+            inst.pendingBaseColorFactor = baseColorFactor;
+            inst.pendingMetallic = metallic;
+            inst.pendingRoughness = roughness;
+            m_instances.push_back(inst);
         }
     }
+}
+
+// ============================================================================
+// Resource loaders with path-based deduplication
+// ============================================================================
+
+Mesh* Scene::getOrLoadMesh(Context& ctx, const std::string& path) {
+    auto it = m_meshMap.find(path);
+    if (it != m_meshMap.end()) {
+        return it->second;
+    }
+    auto mesh = std::make_unique<Mesh>(Mesh::loadObj(ctx, path));
+    Mesh* ptr = mesh.get();
+    m_meshes.push_back(std::move(mesh));
+    m_meshMap[path] = ptr;
+    return ptr;
+}
+
+Mesh* Scene::getOrLoadMesh(Context& ctx, const std::string& key,
+                           const std::vector<Vertex>& vertices,
+                           const std::vector<uint32_t>& indices) {
+    auto it = m_meshMap.find(key);
+    if (it != m_meshMap.end()) {
+        return it->second;
+    }
+    auto mesh = std::make_unique<Mesh>(ctx, vertices, indices);
+    Mesh* ptr = mesh.get();
+    m_meshes.push_back(std::move(mesh));
+    m_meshMap[key] = ptr;
+    return ptr;
+}
+
+Texture* Scene::getOrLoadTexture(Context& ctx, const std::string& path) {
+    if (path.empty()) return nullptr;
+    auto it = m_textureMap.find(path);
+    if (it != m_textureMap.end()) {
+        return it->second;
+    }
+    auto texture = std::make_unique<Texture>(ctx, path);
+    Texture* ptr = texture.get();
+    m_textures.push_back(std::move(texture));
+    m_textureMap[path] = ptr;
+    return ptr;
 }
 
 } // namespace kazu

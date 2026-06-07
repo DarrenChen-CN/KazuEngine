@@ -152,6 +152,14 @@ PipelineBuilder& PipelineBuilder::clearDynamicStates() {
     return *this;
 }
 
+PipelineBuilder& PipelineBuilder::vertexInput(
+    const VkVertexInputBindingDescription& binding,
+    const std::vector<VkVertexInputAttributeDescription>& attributes) {
+    m_explicitVertexBindings = {binding};
+    m_explicitVertexAttributes = attributes;
+    return *this;
+}
+
 PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     if (m_shaderPaths.empty()) {
         fatalError("PipelineBuilder: no shaders specified");
@@ -214,34 +222,39 @@ PipelineBuildResult PipelineBuilder::build(PipelineCache& cache) {
     }
     auto pipelineLayout = std::make_unique<PipelineLayout>(m_ctx, plInfo);
 
-    // Generate vertex input from vertex shader reflection
+    // Vertex input: prefer explicit layout, fall back to SPIR-V reflection
     std::vector<VkVertexInputBindingDescription> vertexBindings;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;
-    uint32_t stride = 0;
 
-    for (const auto& path : m_shaderPaths) {
-        const auto& refl = m_shaderLib.getReflection(path);
-        if (refl.stage != VK_SHADER_STAGE_VERTEX_BIT) continue;
+    if (!m_explicitVertexBindings.empty()) {
+        vertexBindings = m_explicitVertexBindings;
+        vertexAttributes = m_explicitVertexAttributes;
+    } else {
+        uint32_t stride = 0;
+        for (const auto& path : m_shaderPaths) {
+            const auto& refl = m_shaderLib.getReflection(path);
+            if (refl.stage != VK_SHADER_STAGE_VERTEX_BIT) continue;
 
-        vertexAttributes.reserve(refl.vertexInputs.size());
-        for (const auto& input : refl.vertexInputs) {
-            VkVertexInputAttributeDescription desc{};
-            desc.binding = 0;
-            desc.location = input.location;
-            desc.format = input.format;
-            desc.offset = stride;
-            vertexAttributes.push_back(desc);
-            stride += formatSize(input.format);
+            vertexAttributes.reserve(refl.vertexInputs.size());
+            for (const auto& input : refl.vertexInputs) {
+                VkVertexInputAttributeDescription desc{};
+                desc.binding = 0;
+                desc.location = input.location;
+                desc.format = input.format;
+                desc.offset = stride;
+                vertexAttributes.push_back(desc);
+                stride += formatSize(input.format);
+            }
+            break;
         }
-        break;
-    }
 
-    if (stride > 0) {
-        VkVertexInputBindingDescription binding{};
-        binding.binding = 0;
-        binding.stride = stride;
-        binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-        vertexBindings.push_back(binding);
+        if (stride > 0) {
+            VkVertexInputBindingDescription binding{};
+            binding.binding = 0;
+            binding.stride = stride;
+            binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+            vertexBindings.push_back(binding);
+        }
     }
 
     // Assemble PipelineState (used as cache key)

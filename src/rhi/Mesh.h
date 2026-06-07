@@ -9,6 +9,7 @@
 
 #include "../core/Context.h"
 #include "../core/Buffer.h"
+#include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -20,6 +21,12 @@ struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 texCoord;
+
+    // Exact Vulkan vertex input layout for this struct.
+    // Use these instead of SPIR-V reflection guesswork to ensure
+    // C++ memory layout and GPU pipeline state match precisely.
+    static VkVertexInputBindingDescription getBindingDescription();
+    static std::vector<VkVertexInputAttributeDescription> getAttributeDescriptions();
 };
 
 class Mesh {

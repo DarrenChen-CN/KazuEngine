@@ -1,54 +1,129 @@
 // ============================================================================
-// KazuEngine - RHI Layer: Material
+// KazuEngine - RHI Layer: Material System
 //
-// Binds shaders + textures into a renderable unit.
-// Manages DescriptorSetLayout (via cache), DescriptorPool, and DescriptorSet.
+// Material is an abstract base class. Concrete subclasses (PBRMaterial,
+// UnlitMaterial, etc.) define their own properties and binding logic.
+//
+// A Material owns its DescriptorSet (texture bindings) but does NOT own
+// VkPipeline / VkPipelineLayout — those come from ShaderEffect.
+//
+// MaterialCache provides global deduplication: identical materials share
+// the same DescriptorSet.
 // ============================================================================
 
 #pragma once
 
+#include "ShaderEffect.h"
+#include "Texture.h"
+#include "DescriptorSetLayoutCache.h"
 #include "../core/Context.h"
 #include "../core/DescriptorPool.h"
-#include "ShaderLibrary.h"
-#include "DescriptorSetLayoutCache.h"
-#include "Texture.h"
-#include <vector>
-#include <string>
+#include <glm/glm.hpp>
 #include <memory>
+#include <vector>
+#include <array>
+#include <string>
+#include <unordered_map>
 
 namespace kazu {
 
+// ---------------------------------------------------------------------------
+// Material: abstract base
+// ---------------------------------------------------------------------------
+
 class Material {
 public:
-    Material(Context& ctx, ShaderLibrary& shaderLib, DescriptorSetLayoutCache& dslCache);
-    ~Material();
+    virtual ~Material() = default;
 
-    Material(const Material&) = delete;
-    Material& operator=(const Material&) = delete;
-    Material(Material&&) noexcept;
-    Material& operator=(Material&&) noexcept;
+    // Material type identifier ("PBR", "Unlit", "Custom", ...)
+    virtual const char* type() const = 0;
 
-    void setShaders(const std::string& vertPath, const std::string& fragPath);
-    void setTexture(uint32_t binding, Texture& texture);
+    // The ShaderEffect that determines the Pipeline for this material
+    virtual ShaderEffect* effect() const = 0;
 
-    // Creates DSL (via cache), allocates pool & set, updates set with textures
-    void build();
+    // Build GPU resources (DescriptorSet, etc.)
+    virtual void build(Context& ctx, DescriptorSetLayoutCache& dslCache) = 0;
 
-    VkDescriptorSet descriptorSet() const { return m_descriptorSet; }
-    VkDescriptorSetLayout descriptorSetLayout() const { return m_descriptorSetLayout; }
+    // Bind material resources (DescriptorSet, PushConstants, etc.)
+    // Called by the Pass before drawing a mesh with this material.
+    virtual void bind(VkCommandBuffer cmd, VkPipelineLayout layout) = 0;
+
+protected:
+    // Helper: create a basic DescriptorPool for a single set
+    static std::unique_ptr<DescriptorPool> createPool(Context& ctx,
+        const std::vector<VkDescriptorPoolSize>& sizes);
+};
+
+// ---------------------------------------------------------------------------
+// PBRMaterial
+// ---------------------------------------------------------------------------
+
+class PBRMaterial : public Material {
+public:
+    const char* type() const override { return "PBR"; }
+    ShaderEffect* effect() const override { return m_effect; }
+
+    // Set the ShaderEffect before calling build()
+    void setEffect(ShaderEffect* effect) { m_effect = effect; }
+
+    // Texture slots (PBR workflow)
+    Texture* albedoMap = nullptr;                // binding 0
+    Texture* normalMap = nullptr;                // binding 1
+    Texture* metallicRoughnessMap = nullptr;     // binding 2
+    Texture* aoMap = nullptr;                    // binding 3 (optional)
+
+    // Scalar parameters (fallback when texture is absent)
+    glm::vec4 baseColorFactor = glm::vec4(1.0f);
+    float metallic = 0.0f;
+    float roughness = 0.5f;
+    float emissiveStrength = 0.0f;
+    bool doubleSided = false;
+
+    void build(Context& ctx, DescriptorSetLayoutCache& dslCache) override;
+    void bind(VkCommandBuffer cmd, VkPipelineLayout layout) override;
+
+    // Accessors for cache key computation
+    const std::array<Texture*, 4>& textureSlots() const { return m_textures; }
 
 private:
-    Context* m_ctx = nullptr;
-    ShaderLibrary* m_shaderLib = nullptr;
-    DescriptorSetLayoutCache* m_dslCache = nullptr;
+    ShaderEffect* m_effect = nullptr;
+    std::array<Texture*, 4> m_textures = {};
 
-    std::string m_vertPath;
-    std::string m_fragPath;
-    std::vector<std::pair<uint32_t, Texture*>> m_textures;
-
-    VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
-    std::unique_ptr<DescriptorPool> m_descriptorPool;
     VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE;
+    std::unique_ptr<DescriptorPool> m_pool;
+};
+
+// ---------------------------------------------------------------------------
+// MaterialCache
+// ---------------------------------------------------------------------------
+
+class MaterialCache {
+public:
+    // Get-or-create: returns a cached Material if an identical one exists.
+    // Otherwise takes ownership of the prototype and returns it.
+    Material* getOrCreate(std::unique_ptr<Material> prototype);
+
+    void clear();
+
+private:
+    // Cache key for PBRMaterial (extend for other types as needed)
+    struct PBRKey {
+        ShaderEffect* effect;
+        std::array<Texture*, 4> textures;
+        glm::vec4 baseColorFactor;
+        float metallic;
+        float roughness;
+        float emissiveStrength;
+        bool doubleSided;
+
+        bool operator==(const PBRKey& o) const;
+    };
+
+    struct PBRKeyHash {
+        size_t operator()(const PBRKey& k) const;
+    };
+
+    std::unordered_map<PBRKey, std::unique_ptr<Material>, PBRKeyHash> m_pbrCache;
 };
 
 } // namespace kazu

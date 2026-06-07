@@ -29,6 +29,15 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
     // ---- Phase 1: Declare ----
     m_renderGraph = std::make_unique<RenderGraph>(m_rhi->ctx());
 
+    // Import swapchain as an external resource (handle is rebound per-frame)
+    m_swapchainHandle = m_renderGraph->addImportedTexture(
+        "Swapchain",
+        {m_rhi->extent().width, m_rhi->extent().height,
+         m_rhi->swapchainFormat(),
+         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
+        m_rhi->swapchainImage(0),      // placeholder, rebound each frame
+        m_rhi->swapchainImageView(0)); // placeholder, rebound each frame
+
     m_gbufferPass = std::make_unique<GBufferPass>();
     m_gbufferPass->declare(m_rhi, m_renderGraph.get());
 
@@ -37,6 +46,7 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
         m_gbufferPass->albedoHandle(),
         m_gbufferPass->normalHandle(),
         m_gbufferPass->depthHandle());
+    m_lightingPass->setSwapchainHandle(m_swapchainHandle);
     m_lightingPass->declare(m_rhi, m_renderGraph.get());
 
     // ---- Phase 2: Compile ----
@@ -46,12 +56,26 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
 
     // ---- Phase 3: Create VK objects ----
     m_gbufferPass->create(m_scene, m_camera, m_renderGraph.get());
+
+    // Build scene materials now that ShaderEffect is ready
+    m_scene->buildMaterials(m_rhi->ctx(), m_gbufferPass->shaderEffect(),
+                            m_rhi->dslCache());
+
     m_lightingPass->create(m_scene, m_camera, m_renderGraph.get());
 
     // Restore display mode after resize re-init
     m_lightingPass->setDisplayMode(m_displayMode);
 
     spdlog::info("DeferredShading initialized (pure composer)");
+}
+
+void DeferredShading::bindSwapchainImage(uint32_t imageIndex) {
+    if (m_renderGraph && m_swapchainHandle != RenderGraph::InvalidResource) {
+        m_renderGraph->bindImportedTexture(
+            m_swapchainHandle,
+            m_rhi->swapchainImage(imageIndex),
+            m_rhi->swapchainImageView(imageIndex));
+    }
 }
 
 void DeferredShading::exposePanel(PanelDesc& desc) {

@@ -45,6 +45,16 @@ public:
     ResourceHandle addTexture(const char* name, const TextureDesc& desc);
     ResourceHandle addBuffer (const char* name);
 
+    // Import an externally-managed image (e.g. Swapchain image).
+    // The RenderGraph will not allocate memory for it, but it participates
+    // in barrier derivation and can be queried like a regular texture.
+    ResourceHandle addImportedTexture(const char* name, const TextureDesc& desc,
+                                       VkImage image, VkImageView view);
+
+    // Re-bind the external image handles for an imported resource.
+    // Called each frame when the Swapchain image index changes.
+    void bindImportedTexture(ResourceHandle handle, VkImage image, VkImageView view);
+
     // ------------------------------------------------------------------------
     // Pass declaration
     // ------------------------------------------------------------------------
@@ -92,7 +102,8 @@ public:
     size_t      getPassCount() const { return m_passes.size(); }
     bool        isCompiled()   const { return !m_sortedIndices.empty(); }
 
-    // Transient resource queries (valid after compile())
+    // Resource queries (valid after compile())
+    VkImage     getImageHandle(ResourceHandle handle) const;
     VkImageView getImageView(ResourceHandle handle) const;
     VkExtent2D  getImageExtent(ResourceHandle handle) const;
     VkFormat    getImageFormat(ResourceHandle handle) const;
@@ -103,13 +114,27 @@ private:
     struct ResourceNode {
         std::string name;
         TextureDesc desc;              // valid only for textures (format != UNDEFINED)
-        std::unique_ptr<Image> image;  // allocated after compile()
+        std::unique_ptr<Image> image;  // allocated after compile() (null for imported)
+        bool isImported = false;
+        VkImage externalImage = VK_NULL_HANDLE;
+        VkImageView externalImageView = VK_NULL_HANDLE;
+    };
+
+    // Barrier description (image handle is resolved at execute time)
+    struct BarrierDesc {
+        ResourceHandle resource;
+        VkImageLayout oldLayout;
+        VkImageLayout newLayout;
+        VkAccessFlags srcAccess;
+        VkAccessFlags dstAccess;
+        VkPipelineStageFlags srcStage;
+        VkPipelineStageFlags dstStage;
     };
 
     struct BarrierBatch {
         VkPipelineStageFlags srcStage = 0;
         VkPipelineStageFlags dstStage = 0;
-        std::vector<VkImageMemoryBarrier> barriers;
+        std::vector<BarrierDesc> descs;
     };
 
     struct PassNode {

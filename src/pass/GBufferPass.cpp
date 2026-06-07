@@ -6,28 +6,15 @@
 #include "core/Utils.h"
 #include "core/Path.h"
 #include "rhi/RHI.h"
-#include "rhi/PipelineBuilder.h"
-#include "rhi/PipelineCache.h"
-#include "core/PipelineLayout.h"
+#include "rhi/ShaderEffect.h"
 #include "rhi/Camera.h"
+#include "rhi/Mesh.h"
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
 #include <glm/glm.hpp>
 #include <array>
 
 namespace kazu {
-
-namespace {
-
-struct GBufferPush {
-    glm::mat4 mvp;
-    glm::vec4 lightPos;
-    glm::vec4 viewPos;
-    int displayMode;
-    int _pad[3];
-};
-
-} // anonymous namespace
 
 GBufferPass::GBufferPass() = default;
 
@@ -134,19 +121,25 @@ void GBufferPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
         VK_CHECK(vkCreateFramebuffer(m_rhi->ctx().device(), &fbInfo, nullptr, &m_framebuffer));
     }
 
-    // ---- Pipeline ----
+    // ---- ShaderEffect (replaces PipelineBuilder) ----
     {
-        m_pipelineCache = std::make_unique<PipelineCache>(m_rhi->ctx());
-        PipelineBuilder builder(m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache());
-        builder.shader(kazu::Path::resolveShader("gbuffer.frag.spv"))
-               .shader(kazu::Path::resolveShader("triangle.vert.spv"))
-               .renderPass(m_renderPass)
-               .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE)
-               .cullMode(VK_CULL_MODE_BACK_BIT);
-        auto result = builder.build(*m_pipelineCache);
-        m_pipeline = result.pipeline->handle();
-        m_pipelineLayoutObj = std::move(result.layout);
-        m_pipelineLayout = m_pipelineLayoutObj->handle();
+        ShaderEffect::Key key;
+        key.shaderPaths = {
+            kazu::Path::resolveShader("triangle.vert.spv"),
+            kazu::Path::resolveShader("gbuffer.frag.spv")
+        };
+        key.state.renderPass = m_renderPass;
+        key.state.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        key.state.cullMode = VK_CULL_MODE_BACK_BIT;
+        key.state.depthTest = true;
+        key.state.depthWrite = true;
+        key.state.depthCompareOp = VK_COMPARE_OP_LESS;
+        key.state.vertexBindings = {Vertex::getBindingDescription()};
+        key.state.vertexAttributes = Vertex::getAttributeDescriptions();
+
+        m_effect = ShaderEffect::getOrCreate(
+            m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache(),
+            m_rhi->pipelineCache(), key);
     }
 }
 
@@ -165,7 +158,7 @@ void GBufferPass::execute(VkCommandBuffer cmd) {
     rpInfo.clearValueCount = 4;
     rpInfo.pClearValues = clears.data();
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_effect->pipeline());
 
     VkViewport viewport{};
     viewport.width = static_cast<float>(m_rhi->extent().width);
@@ -177,17 +170,13 @@ void GBufferPass::execute(VkCommandBuffer cmd) {
     scissor.extent = m_rhi->extent();
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    GBufferPush push{};
-    push.mvp = m_camera->getProjectionMatrix(m_rhi->aspect())
-             * m_camera->getViewMatrix();
-    push.lightPos = glm::vec4(m_scene->config().lightPos, 0.0f);
-    push.viewPos = glm::vec4(m_camera->position(), 0.0f);
-    push.displayMode = 0;
-    vkCmdPushConstants(cmd, m_pipelineLayout,
-        VK_SHADER_STAGE_VERTEX_BIT,
-        0, sizeof(GBufferPush), &push);
+    glm::mat4 viewProj = m_camera->getProjectionMatrix(m_rhi->aspect())
+                       * m_camera->getViewMatrix();
+    glm::vec4 lightPos = glm::vec4(m_scene->config().lightPos, 0.0f);
+    glm::vec4 viewPos = glm::vec4(m_camera->position(), 0.0f);
 
-    m_scene->draw(cmd, m_pipelineLayout);
+    m_scene->draw(cmd, m_effect->pipelineLayout(),
+                  viewProj, lightPos, viewPos, 0);
     vkCmdEndRenderPass(cmd);
 }
 

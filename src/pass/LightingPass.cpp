@@ -6,9 +6,7 @@
 #include "core/Utils.h"
 #include "core/Path.h"
 #include "rhi/RHI.h"
-#include "rhi/PipelineBuilder.h"
-#include "rhi/PipelineCache.h"
-#include "core/PipelineLayout.h"
+#include "rhi/ShaderEffect.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
@@ -35,12 +33,27 @@ LightingPass::~LightingPass() {
     VkDevice device = m_rhi->ctx().device();
     vkDeviceWaitIdle(device);
 
+    destroyRenderPassAndFramebuffers();
+
     if (m_descriptorPool)
         vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);
     if (m_descriptorSetLayout)
         vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
     if (m_sampler)
         vkDestroySampler(device, m_sampler, nullptr);
+}
+
+void LightingPass::destroyRenderPassAndFramebuffers() {
+    if (!m_rhi) return;
+    VkDevice device = m_rhi->ctx().device();
+    for (auto fb : m_framebuffers) {
+        if (fb) vkDestroyFramebuffer(device, fb, nullptr);
+    }
+    m_framebuffers.clear();
+    if (m_renderPass) {
+        vkDestroyRenderPass(device, m_renderPass, nullptr);
+        m_renderPass = VK_NULL_HANDLE;
+    }
 }
 
 void LightingPass::setInputs(RenderGraph::ResourceHandle albedo,
@@ -59,6 +72,7 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
         b.read(self->m_albedoHandle);
         b.read(self->m_normalHandle);
         b.read(self->m_depthHandle);
+        b.writeColor(0, self->m_swapchainHandle);
         b.execute = [self](VkCommandBuffer cmd) {
             self->execute(cmd);
         };
@@ -72,21 +86,24 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     VkImageView albedoView = rg->getImageView(m_albedoHandle);
     VkImageView normalView = rg->getImageView(m_normalHandle);
 
-    // ---- Pipeline ----
+    // ---- RenderPass & Framebuffers ----
+    createRenderPassAndFramebuffers();
+
+    // ---- ShaderEffect ----
     {
-        m_pipelineCache = std::make_unique<PipelineCache>(m_rhi->ctx());
-        PipelineBuilder builder(m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache());
-        builder.shader(kazu::Path::resolveShader("lighting.frag.spv"))
-               .shader(kazu::Path::resolveShader("lighting.vert.spv"))
-               .renderPass(m_rhi->renderPass())
-               .topology(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP)
-               .cullMode(VK_CULL_MODE_NONE)
-               .depthTest(false)
-               .depthWrite(false);
-        auto result = builder.build(*m_pipelineCache);
-        m_pipeline = result.pipeline->handle();
-        m_pipelineLayoutObj = std::move(result.layout);
-        m_pipelineLayout = m_pipelineLayoutObj->handle();
+        ShaderEffect::Key key;
+        key.shaderPaths = {
+            kazu::Path::resolveShader("lighting.vert.spv"),
+            kazu::Path::resolveShader("lighting.frag.spv")
+        };
+        key.state.renderPass = m_renderPass;
+        key.state.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        key.state.cullMode = VK_CULL_MODE_NONE;
+        key.state.depthTest = false;
+        key.state.depthWrite = false;
+        m_effect = ShaderEffect::getOrCreate(
+            m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache(),
+            m_rhi->pipelineCache(), key);
     }
 
     // ---- Descriptor Set ----
@@ -164,20 +181,77 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     }
 }
 
+void LightingPass::createRenderPassAndFramebuffers() {
+    VkDevice device = m_rhi->ctx().device();
+    VkExtent2D extent = m_rhi->extent();
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = m_rhi->swapchainFormat();
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo rpInfo{};
+    rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    rpInfo.attachmentCount = 1;
+    rpInfo.pAttachments = &colorAttachment;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dependency;
+    VK_CHECK(vkCreateRenderPass(device, &rpInfo, nullptr, &m_renderPass));
+
+    // Create per-swapchain-image framebuffers
+    uint32_t imageCount = m_rhi->swapchainImageCount();
+    m_framebuffers.resize(imageCount);
+    for (uint32_t i = 0; i < imageCount; ++i) {
+        VkImageView attachment = m_rhi->swapchainImageView(i);
+        VkFramebufferCreateInfo fbInfo{};
+        fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        fbInfo.renderPass = m_renderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &attachment;
+        fbInfo.width = extent.width;
+        fbInfo.height = extent.height;
+        fbInfo.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device, &fbInfo, nullptr, &m_framebuffers[i]));
+    }
+}
+
 void LightingPass::execute(VkCommandBuffer cmd) {
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-    rpInfo.renderPass = m_rhi->renderPass();
-    rpInfo.framebuffer = m_rhi->framebuffer(m_currentImageIndex);
+    rpInfo.renderPass = m_renderPass;
+    rpInfo.framebuffer = m_framebuffers[m_currentImageIndex];
     rpInfo.renderArea.offset = {0, 0};
     rpInfo.renderArea.extent = m_rhi->extent();
-    std::array<VkClearValue, 2> clears{};
+    std::array<VkClearValue, 1> clears{};
     clears[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clears[1].depthStencil = {1.0f, 0};
-    rpInfo.clearValueCount = 2;
+    rpInfo.clearValueCount = 1;
     rpInfo.pClearValues = clears.data();
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_effect->pipeline());
 
     VkViewport viewport{};
     viewport.width = static_cast<float>(m_rhi->extent().width);
@@ -190,7 +264,7 @@ void LightingPass::execute(VkCommandBuffer cmd) {
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+        m_effect->pipelineLayout(), 0, 1, &m_descriptorSet, 0, nullptr);
 
     LightingPush push{};
     float aspect = static_cast<float>(m_rhi->extent().width) / m_rhi->extent().height;
@@ -200,7 +274,7 @@ void LightingPass::execute(VkCommandBuffer cmd) {
     push.lightPos = glm::vec4(m_scene->config().lightPos, 0.0f);
     push.viewPos = glm::vec4(m_camera->position(), 0.0f);
     push.displayMode = m_displayMode;
-    vkCmdPushConstants(cmd, m_pipelineLayout,
+    vkCmdPushConstants(cmd, m_effect->pipelineLayout(),
         VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(LightingPush), &push);
 

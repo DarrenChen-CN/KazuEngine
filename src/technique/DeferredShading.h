@@ -33,6 +33,9 @@ public:
 
     void setCurrentImageIndex(uint32_t idx);
 
+    // Bind the current swapchain image to the imported resource before execute
+    void bindSwapchainImage(uint32_t imageIndex);
+
     // Expose GBuffer outputs for downstream passes / external techniques
     RenderGraph::ResourceHandle albedoHandle() const;
     RenderGraph::ResourceHandle normalHandle() const;
@@ -52,6 +55,8 @@ private:
     std::unique_ptr<GBufferPass>  m_gbufferPass;
     std::unique_ptr<LightingPass> m_lightingPass;
     std::unique_ptr<RenderGraph>  m_renderGraph;
+
+    RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;
 };
 
 } // namespace kazu

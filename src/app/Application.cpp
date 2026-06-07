@@ -46,8 +46,7 @@ bool Application::init() {
 
     m_scene = std::make_unique<Scene>();
     m_scene->loadFromFile(
-        m_rhi->ctx(), m_rhi->shaderLib(), m_rhi->dslCache(),
-        "assets/scenes/sample-scene.json");
+        m_rhi->ctx(), "assets/scenes/sample-scene.json");
 
     const auto& cfg = m_scene->config();
     if (cfg.windowWidth != m_windowWidth || cfg.windowHeight != m_windowHeight) {
@@ -99,6 +98,7 @@ void Application::cleanup() {
 
 void Application::recordFrame(uint32_t imageIndex) {
     m_deferred->setCurrentImageIndex(imageIndex);
+    m_deferred->bindSwapchainImage(imageIndex);
     m_deferred->renderGraph()->execute(m_rhi->currentCmd());
 
     m_appUI->beginFrame();

@@ -6,14 +6,10 @@
 #include "../core/Path.h"
 #include "../core/Context.h"
 #include "../core/Swapchain.h"
-#include "../core/RenderPass.h"
-#include "../core/PipelineLayout.h"
-#include "../core/GraphicsPipeline.h"
 #include "../core/CommandPool.h"
 #include "../core/CommandBuffer.h"
 #include "../core/SyncObjects.h"
 #include "ShaderLibrary.h"
-#include "PipelineBuilder.h"
 #include "PipelineCache.h"
 #include "DescriptorSetLayoutCache.h"
 #include "../core/Utils.h"
@@ -34,23 +30,6 @@ bool RHI::init(GLFWwindow* window) {
     m_descriptorSetLayoutCache = std::make_unique<DescriptorSetLayoutCache>(*m_ctx);
     m_pipelineCache = std::make_unique<PipelineCache>(*m_ctx);
 
-    createRenderPass();
-    m_swapchain->createFramebuffers(m_renderPass->handle());
-    createGraphicsPipeline();
-    m_shaderLibrary->logReflections();
-
-    // Verify DescriptorSetLayoutCache deduplication
-    VkDescriptorSetLayoutBinding testBinding{};
-    testBinding.binding = 0;
-    testBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    testBinding.descriptorCount = 1;
-    testBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    auto h1 = m_descriptorSetLayoutCache->getOrCreate({testBinding});
-    auto h2 = m_descriptorSetLayoutCache->getOrCreate({testBinding});
-    if (h1 == h2 && m_descriptorSetLayoutCache->cacheSize() == 1) {
-        spdlog::info("[DescriptorSetLayoutCache] Verified: deduplication works");
-    }
-
     createCommandPoolAndBuffers();
     createSyncObjects();
     return true;
@@ -64,85 +43,12 @@ void RHI::cleanup() {
     m_commandBuffers.clear();
     m_commandPool.reset();
 
-    m_graphicsPipeline = nullptr;
     m_shaderLibrary.reset();
-    m_pipelineLayout.reset();
     m_pipelineCache.reset();
-    m_descriptorSetLayout = VK_NULL_HANDLE;
     m_descriptorSetLayoutCache.reset();
-    m_renderPass.reset();
     m_swapchain.reset();
     m_ctx.reset();
     m_window = nullptr;
-}
-
-void RHI::createRenderPass() {
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = m_swapchain->format();
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
-    VkAttachmentReference colorAttachmentRef{};
-    colorAttachmentRef.attachment = 0;
-    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentDescription depthAttachment{};
-    depthAttachment.format = VK_FORMAT_D32_SFLOAT;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference depthAttachmentRef{};
-    depthAttachmentRef.attachment = 1;
-    depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorAttachmentRef;
-    subpass.pDepthStencilAttachment = &depthAttachmentRef;
-
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.srcAccessMask = 0;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-    renderPassInfo.pAttachments = attachments.data();
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
-
-    m_renderPass = std::make_unique<RenderPass>(*m_ctx, renderPassInfo);
-}
-
-void RHI::createGraphicsPipeline() {
-    PipelineBuilder builder(*m_ctx, *m_shaderLibrary, *m_descriptorSetLayoutCache);
-    builder.shader(Path::resolveShader("triangle.vert.spv"))
-           .shader(Path::resolveShader("triangle.frag.spv"))
-           .renderPass(m_renderPass->handle())
-           .frontFace(VK_FRONT_FACE_COUNTER_CLOCKWISE);
-    auto result = builder.build(*m_pipelineCache);
-
-    m_graphicsPipeline = result.pipeline;
-    m_pipelineLayout = std::move(result.layout);
-    m_descriptorSetLayout = result.descriptorSetLayout;
 }
 
 void RHI::createCommandPoolAndBuffers() {
@@ -211,7 +117,7 @@ void RHI::recreateSwapchain() {
         glfwWaitEvents();
     }
 
-    m_swapchain->recreate(m_renderPass->handle());
+    m_swapchain->recreate(VK_NULL_HANDLE); // framebuffers managed by passes now
     m_syncObjects->recreateImageRenderFinished(m_swapchain->imageCount());
 }
 
@@ -219,17 +125,14 @@ void RHI::recreateSwapchain() {
 VkCommandBuffer RHI::currentCmd() const {
     return m_commandBuffers[m_currentFrame]->handle();
 }
-VkPipeline RHI::graphicsPipeline() const {
-    return m_graphicsPipeline->handle();
+VkExtent2D RHI::extent() const {
+    return m_swapchain->extent();
 }
-VkPipelineLayout RHI::pipelineLayout() const {
-    return m_pipelineLayout->handle();
+float RHI::aspect() const {
+    return static_cast<float>(m_swapchain->extent().width) / m_swapchain->extent().height;
 }
-VkRenderPass RHI::renderPass() const {
-    return m_renderPass->handle();
-}
-VkFramebuffer RHI::framebuffer(uint32_t imageIndex) const {
-    return m_swapchain->framebuffer(imageIndex);
+VkImage RHI::swapchainImage(uint32_t imageIndex) const {
+    return m_swapchain->image(imageIndex);
 }
 VkImageView RHI::swapchainImageView(uint32_t imageIndex) const {
     return m_swapchain->imageView(imageIndex);
@@ -240,17 +143,14 @@ uint32_t RHI::swapchainImageCount() const {
 VkFormat RHI::swapchainFormat() const {
     return m_swapchain->format();
 }
-VkExtent2D RHI::extent() const {
-    return m_swapchain->extent();
-}
-float RHI::aspect() const {
-    return static_cast<float>(m_swapchain->extent().width) / m_swapchain->extent().height;
-}
 ShaderLibrary& RHI::shaderLib() {
     return *m_shaderLibrary;
 }
 DescriptorSetLayoutCache& RHI::dslCache() {
     return *m_descriptorSetLayoutCache;
+}
+PipelineCache& RHI::pipelineCache() {
+    return *m_pipelineCache;
 }
 Context& RHI::ctx() {
     return *m_ctx;

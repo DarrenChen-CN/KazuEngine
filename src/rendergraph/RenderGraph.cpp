@@ -57,6 +57,27 @@ RenderGraph::ResourceHandle RenderGraph::addBuffer(const char* name) {
     return handle;
 }
 
+RenderGraph::ResourceHandle RenderGraph::addImportedTexture(const char* name, const TextureDesc& desc,
+                                                             VkImage image, VkImageView view) {
+    ResourceHandle handle = static_cast<ResourceHandle>(m_resources.size());
+    ResourceNode node;
+    node.name = name ? name : "";
+    node.desc = desc;
+    node.isImported = true;
+    node.externalImage = image;
+    node.externalImageView = view;
+    m_resources.push_back(std::move(node));
+    return handle;
+}
+
+void RenderGraph::bindImportedTexture(ResourceHandle handle, VkImage image, VkImageView view) {
+    if (handle >= m_resources.size()) return;
+    auto& res = m_resources[handle];
+    if (!res.isImported) return;
+    res.externalImage = image;
+    res.externalImageView = view;
+}
+
 // ============================================================================
 // Pass declaration
 // ============================================================================
@@ -90,9 +111,11 @@ RenderGraph::PassHandle RenderGraph::addPass(const char* name, PassSetupFn setup
 
 bool RenderGraph::compile() {
     m_sortedIndices.clear();
-    // Release any previously allocated transient images
+    // Release any previously allocated transient images (keep imported resources intact)
     for (auto& res : m_resources) {
-        res.image.reset();
+        if (!res.isImported) {
+            res.image.reset();
+        }
     }
 
     size_t n = m_passes.size();
@@ -160,6 +183,7 @@ void RenderGraph::allocateResources() {
 
     for (uint32_t i = 0; i < resCount; ++i) {
         auto& res = m_resources[i];
+        if (res.isImported) continue; // externally managed
         if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer, not texture
         if (firstPass[i] == -1) continue; // unused, don't allocate
 
@@ -224,24 +248,24 @@ void RenderGraph::deriveBarriers() {
 
         auto emitBarrier = [&](ResourceHandle rh, const ResourceState& oldState, const UsageInfo& newUsage) {
             const auto& res = m_resources[rh];
-            if (!res.image) return; // buffer or unallocated
+            if (res.desc.format == VK_FORMAT_UNDEFINED) return; // buffer or unallocated
+            // Skip barrier if layout/stage/access haven't changed
+            if (oldState.layout == newUsage.layout &&
+                oldState.stage == newUsage.stage &&
+                oldState.access == newUsage.access) {
+                return;
+            }
 
-            VkImageMemoryBarrier barrier{};
-            barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            barrier.oldLayout = oldState.layout;
-            barrier.newLayout = newUsage.layout;
-            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            barrier.image = res.image->handle();
-            barrier.subresourceRange.aspectMask = aspectMaskFromFormat(res.desc.format);
-            barrier.subresourceRange.baseMipLevel = 0;
-            barrier.subresourceRange.levelCount = 1;
-            barrier.subresourceRange.baseArrayLayer = 0;
-            barrier.subresourceRange.layerCount = 1;
-            barrier.srcAccessMask = oldState.access;
-            barrier.dstAccessMask = newUsage.access;
+            BarrierDesc desc{};
+            desc.resource = rh;
+            desc.oldLayout = oldState.layout;
+            desc.newLayout = newUsage.layout;
+            desc.srcAccess = oldState.access;
+            desc.dstAccess = newUsage.access;
+            desc.srcStage = oldState.stage;
+            desc.dstStage = newUsage.stage;
 
-            pass.preBarrier.barriers.push_back(barrier);
+            pass.preBarrier.descs.push_back(desc);
             pass.preBarrier.srcStage |= oldState.stage;
             pass.preBarrier.dstStage |= newUsage.stage;
         };
@@ -277,7 +301,7 @@ void RenderGraph::deriveBarriers() {
         }
 
         spdlog::debug("[RenderGraph] Pass '{}' pre-barriers: {} (srcStage=0x{:x}, dstStage=0x{:x})",
-                      pass.name, pass.preBarrier.barriers.size(),
+                      pass.name, pass.preBarrier.descs.size(),
                       pass.preBarrier.srcStage, pass.preBarrier.dstStage);
     }
 }
@@ -311,15 +335,47 @@ void RenderGraph::execute(VkCommandBuffer cmd) const {
     for (uint32_t idx : m_sortedIndices) {
         const auto& pass = m_passes[idx];
 
-        if (!pass.preBarrier.barriers.empty()) {
-            vkCmdPipelineBarrier(cmd,
-                pass.preBarrier.srcStage,
-                pass.preBarrier.dstStage,
-                0,
-                0, nullptr,
-                0, nullptr,
-                static_cast<uint32_t>(pass.preBarrier.barriers.size()),
-                pass.preBarrier.barriers.data());
+        if (!pass.preBarrier.descs.empty()) {
+            // Build VkImageMemoryBarriers from descriptors (resolve image handles at execute time)
+            std::vector<VkImageMemoryBarrier> barriers;
+            barriers.reserve(pass.preBarrier.descs.size());
+            for (const auto& desc : pass.preBarrier.descs) {
+                const auto& res = m_resources[desc.resource];
+                VkImage image = VK_NULL_HANDLE;
+                if (res.isImported) {
+                    image = res.externalImage;
+                } else if (res.image) {
+                    image = res.image->handle();
+                }
+                if (image == VK_NULL_HANDLE) continue;
+
+                VkImageMemoryBarrier barrier{};
+                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                barrier.oldLayout = desc.oldLayout;
+                barrier.newLayout = desc.newLayout;
+                barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.image = image;
+                barrier.subresourceRange.aspectMask = aspectMaskFromFormat(res.desc.format);
+                barrier.subresourceRange.baseMipLevel = 0;
+                barrier.subresourceRange.levelCount = 1;
+                barrier.subresourceRange.baseArrayLayer = 0;
+                barrier.subresourceRange.layerCount = 1;
+                barrier.srcAccessMask = desc.srcAccess;
+                barrier.dstAccessMask = desc.dstAccess;
+                barriers.push_back(barrier);
+            }
+
+            if (!barriers.empty()) {
+                vkCmdPipelineBarrier(cmd,
+                    pass.preBarrier.srcStage,
+                    pass.preBarrier.dstStage,
+                    0,
+                    0, nullptr,
+                    0, nullptr,
+                    static_cast<uint32_t>(barriers.size()),
+                    barriers.data());
+            }
         }
 
         if (pass.execute) {
@@ -342,9 +398,18 @@ const char* RenderGraph::getPassName(PassHandle handle) const {
     return m_passes[handle].name.c_str();
 }
 
+VkImage RenderGraph::getImageHandle(ResourceHandle handle) const {
+    if (handle >= m_resources.size()) return VK_NULL_HANDLE;
+    const auto& res = m_resources[handle];
+    if (res.isImported) return res.externalImage;
+    if (!res.image) return VK_NULL_HANDLE;
+    return res.image->handle();
+}
+
 VkImageView RenderGraph::getImageView(ResourceHandle handle) const {
     if (handle >= m_resources.size()) return VK_NULL_HANDLE;
     const auto& res = m_resources[handle];
+    if (res.isImported) return res.externalImageView;
     if (!res.image) return VK_NULL_HANDLE;
     return res.image->view();
 }
@@ -352,6 +417,7 @@ VkImageView RenderGraph::getImageView(ResourceHandle handle) const {
 VkExtent2D RenderGraph::getImageExtent(ResourceHandle handle) const {
     if (handle >= m_resources.size()) return {};
     const auto& res = m_resources[handle];
+    if (res.isImported) return {res.desc.width, res.desc.height};
     if (!res.image) return {};
     return res.image->extent();
 }
@@ -359,8 +425,7 @@ VkExtent2D RenderGraph::getImageExtent(ResourceHandle handle) const {
 VkFormat RenderGraph::getImageFormat(ResourceHandle handle) const {
     if (handle >= m_resources.size()) return VK_FORMAT_UNDEFINED;
     const auto& res = m_resources[handle];
-    if (!res.image) return VK_FORMAT_UNDEFINED;
-    return res.image->format();
+    return res.desc.format;
 }
 
 void RenderGraph::clear() {
