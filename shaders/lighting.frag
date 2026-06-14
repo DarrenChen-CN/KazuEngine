@@ -9,7 +9,8 @@ layout(set = 0, binding = 2) uniform sampler2D depthSampler;
 
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
-    vec4 lightPos;
+    vec4 lightDirection;
+    vec4 lightColorIntensity;
     vec4 viewPos;
     int displayMode;
 } pc;
@@ -38,9 +39,9 @@ void main() {
     }
 
     vec3 worldPos = reconstructWorldPos(fragNdc, depth);
-    vec3 lightDir = normalize(pc.lightPos.xyz - worldPos);
+    vec3 lightDir = normalize(-pc.lightDirection.xyz);
     float diff = max(dot(normal, lightDir), 0.0);
     vec3 ambient = albedo * 0.1;
-    vec3 diffuse = albedo * diff;
+    vec3 diffuse = albedo * pc.lightColorIntensity.rgb * pc.lightColorIntensity.a * diff;
     outColor = vec4(ambient + diffuse, 1.0);
 }

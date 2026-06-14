@@ -74,9 +74,6 @@ void PBRMaterial::build(Context& ctx, DescriptorSetLayoutCache& dslCache) {
 }
 
 void PBRMaterial::bind(VkCommandBuffer cmd, VkPipelineLayout layout) {
-    spdlog::debug("[PBRMaterial::bind] descriptorSet={}, layout={}",
-                  reinterpret_cast<void*>(m_descriptorSet),
-                  reinterpret_cast<void*>(layout));
     if (m_descriptorSet != VK_NULL_HANDLE) {
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 layout, 0, 1, &m_descriptorSet, 0, nullptr);

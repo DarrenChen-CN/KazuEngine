@@ -42,6 +42,15 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     auto light = j.value("light", json::object());
     auto lpos = light.value("position", std::vector<float>{2.0f, 3.0f, 2.0f});
     m_config.lightPos = glm::vec3(lpos[0], lpos[1], lpos[2]);
+    auto ldir = light.value("direction", std::vector<float>{-lpos[0], -lpos[1], -lpos[2]});
+    auto lcolor = light.value("color", std::vector<float>{1.0f, 1.0f, 1.0f});
+    glm::vec3 direction(ldir[0], ldir[1], ldir[2]);
+    if (glm::length(direction) < 0.0001f) {
+        direction = glm::vec3(-1.0f, -1.0f, -1.0f);
+    }
+    m_directionalLight.direction = glm::normalize(direction);
+    m_directionalLight.color = glm::vec3(lcolor[0], lcolor[1], lcolor[2]);
+    m_directionalLight.intensity = light.value("intensity", 1.0f);
 
     // Parse window
     auto window = j.value("window", json::object());
@@ -50,6 +59,10 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
 
     spdlog::info("[Scene] Camera Eye: ({:.1f}, {:.1f}, {:.1f})", m_config.cameraEye.x, m_config.cameraEye.y, m_config.cameraEye.z);
     spdlog::info("[Scene] Light Position: ({:.1f}, {:.1f}, {:.1f})", m_config.lightPos.x, m_config.lightPos.y, m_config.lightPos.z);
+    spdlog::info("[Scene] Directional Light: dir=({:.2f}, {:.2f}, {:.2f}), color=({:.2f}, {:.2f}, {:.2f}), intensity={:.2f}",
+                 m_directionalLight.direction.x, m_directionalLight.direction.y, m_directionalLight.direction.z,
+                 m_directionalLight.color.x, m_directionalLight.color.y, m_directionalLight.color.z,
+                 m_directionalLight.intensity);
     spdlog::info("[Scene] Loading models...");
 
     // Parse models
@@ -95,7 +108,6 @@ void Scene::buildMaterials(Context& ctx, ShaderEffect* effect,
 void Scene::draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
                     const glm::mat4& viewProj, const glm::vec4& lightPos,
                     const glm::vec4& viewPos, int displayMode) {
-    spdlog::debug("[Scene::draw] {} instances", m_instances.size());
     for (auto& inst : m_instances) {
         GBufferPush push{};
         push.mvp = viewProj * inst.transform;
@@ -105,9 +117,6 @@ void Scene::draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
         vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(GBufferPush), &push);
 
-        spdlog::debug("[Scene::draw] mesh={}, material={}",
-                      reinterpret_cast<void*>(inst.mesh),
-                      reinterpret_cast<void*>(inst.material));
         if (inst.material) {
             inst.material->bind(cmd, pipelineLayout);
         }

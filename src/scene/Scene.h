@@ -10,6 +10,7 @@
 #include "../rhi/Mesh.h"
 #include "../rhi/Material.h"
 #include "../rhi/Texture.h"
+#include "Light.h"
 #include <glm/glm.hpp>
 #include <vector>
 #include <memory>
@@ -64,9 +65,11 @@ public:
               const glm::vec4& viewPos, int displayMode);
 
     const SceneConfig& config() const { return m_config; }
+    const DirectionalLight& directionalLight() const { return m_directionalLight; }
 
 private:
     SceneConfig m_config;
+    DirectionalLight m_directionalLight;
 
     // Resource pools (Scene owns the lifetime)
     std::vector<std::unique_ptr<Mesh>> m_meshes;

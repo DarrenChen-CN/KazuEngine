@@ -5,12 +5,14 @@
 #include "technique/DeferredShading.h"
 #include "pass/GBufferPass.h"
 #include "pass/LightingPass.h"
+#include "pass/PresentPass.h"
 #include "app/AppUI.h"
 #include "core/Utils.h"
 #include "rhi/RHI.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
+#include <vector>
 
 namespace kazu {
 
@@ -37,6 +39,12 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
         m_rhi->swapchainImage(0),      // placeholder, rebound each frame
         m_rhi->swapchainImageView(0)); // placeholder, rebound each frame
+    std::vector<VkImageView> swapchainViews;
+    swapchainViews.reserve(m_rhi->swapchainImageCount());
+    for (uint32_t i = 0; i < m_rhi->swapchainImageCount(); ++i) {
+        swapchainViews.push_back(m_rhi->swapchainImageView(i));
+    }
+    m_renderGraph->setImportedTextureViews(m_swapchainHandle, swapchainViews);
 
     m_gbufferPass = std::make_unique<GBufferPass>();
     m_gbufferPass->declare(m_rhi, m_renderGraph.get());
@@ -46,8 +54,12 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
         m_gbufferPass->albedoHandle(),
         m_gbufferPass->normalHandle(),
         m_gbufferPass->depthHandle());
-    m_lightingPass->setSwapchainHandle(m_swapchainHandle);
     m_lightingPass->declare(m_rhi, m_renderGraph.get());
+
+    m_presentPass = std::make_unique<PresentPass>();
+    m_presentPass->setInput(m_lightingPass->sceneColorHandle());
+    m_presentPass->setSwapchainHandle(m_swapchainHandle);
+    m_presentPass->declare(m_rhi, m_renderGraph.get());
 
     // ---- Phase 2: Compile ----
     if (!m_renderGraph->compile()) {
@@ -62,6 +74,7 @@ void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
                             m_rhi->dslCache());
 
     m_lightingPass->create(m_scene, m_camera, m_renderGraph.get());
+    m_presentPass->create(m_scene, m_camera, m_renderGraph.get());
 
     // Restore display mode after resize re-init
     m_lightingPass->setDisplayMode(m_displayMode);
@@ -101,6 +114,9 @@ void DeferredShading::setCurrentImageIndex(uint32_t idx) {
     if (m_lightingPass) {
         m_lightingPass->setCurrentImageIndex(idx);
         m_lightingPass->setDisplayMode(m_displayMode);
+    }
+    if (m_presentPass) {
+        m_presentPass->setCurrentImageIndex(idx);
     }
 }
 

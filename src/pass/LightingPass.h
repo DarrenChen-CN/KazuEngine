@@ -2,7 +2,7 @@
 // KazuEngine - Pass Layer: Lighting Pass
 //
 // Full-screen quad lighting: samples GBuffer Albedo/Normal/Depth,
-// writes to imported swapchain image via RenderGraph.
+// writes HDR scene color via RenderGraph.
 // ============================================================================
 
 #pragma once
@@ -28,11 +28,6 @@ public:
     void setCurrentImageIndex(uint32_t idx) { m_currentImageIndex = idx; }
     void setDisplayMode(int mode) { m_displayMode = mode; }
 
-    // Set the imported swapchain resource handle (called before declare)
-    void setSwapchainHandle(RenderGraph::ResourceHandle handle) {
-        m_swapchainHandle = handle;
-    }
-
     // Called by RenderGraph execute lambda
     void execute(VkCommandBuffer cmd);
 
@@ -40,19 +35,19 @@ public:
     void setInputs(RenderGraph::ResourceHandle albedo,
                    RenderGraph::ResourceHandle normal,
                    RenderGraph::ResourceHandle depth);
+    RenderGraph::ResourceHandle sceneColorHandle() const { return m_sceneColorHandle; }
 
 private:
-    void createRenderPassAndFramebuffers();
-    void destroyRenderPassAndFramebuffers();
-
     RHI*   m_rhi   = nullptr;
     Scene* m_scene = nullptr;
     Camera* m_camera = nullptr;
+    RenderGraph* m_renderGraph = nullptr;
+    RenderGraph::PassHandle m_passHandle = 0;
 
     RenderGraph::ResourceHandle m_albedoHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_normalHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_depthHandle = RenderGraph::InvalidResource;
-    RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_sceneColorHandle = RenderGraph::InvalidResource;
 
     ShaderEffect*    m_effect         = nullptr;
 
@@ -60,9 +55,6 @@ private:
     VkDescriptorSet  m_descriptorSet  = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkSampler        m_sampler        = VK_NULL_HANDLE;
-
-    VkRenderPass  m_renderPass = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> m_framebuffers;
 
     uint32_t m_currentImageIndex = 0;
     int      m_displayMode = 0;

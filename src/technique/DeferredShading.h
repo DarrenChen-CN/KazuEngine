@@ -19,6 +19,7 @@ class Camera;
 class RenderGraph;
 class GBufferPass;
 class LightingPass;
+class PresentPass;
 
 class DeferredShading {
 public:
@@ -54,6 +55,7 @@ private:
 
     std::unique_ptr<GBufferPass>  m_gbufferPass;
     std::unique_ptr<LightingPass> m_lightingPass;
+    std::unique_ptr<PresentPass>  m_presentPass;
     std::unique_ptr<RenderGraph>  m_renderGraph;
 
     RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;

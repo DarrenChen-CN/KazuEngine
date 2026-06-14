@@ -59,6 +59,11 @@ VkDescriptorSetLayout ShaderEffect::descriptorSetLayout() const {
     return m_descriptorSetLayout;
 }
 
+void ShaderEffect::clearCache() {
+    spdlog::info("[ShaderEffect] Clear cache ({} effect(s))", s_cache.size());
+    s_cache.clear();
+}
+
 // ============================================================================
 // Factory: getOrCreate
 // ============================================================================

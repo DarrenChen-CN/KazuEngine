@@ -10,6 +10,7 @@
 #include "../core/CommandBuffer.h"
 #include "../core/SyncObjects.h"
 #include "ShaderLibrary.h"
+#include "ShaderEffect.h"
 #include "PipelineCache.h"
 #include "DescriptorSetLayoutCache.h"
 #include "../core/Utils.h"
@@ -43,6 +44,7 @@ void RHI::cleanup() {
     m_commandBuffers.clear();
     m_commandPool.reset();
 
+    ShaderEffect::clearCache();
     m_shaderLibrary.reset();
     m_pipelineCache.reset();
     m_descriptorSetLayoutCache.reset();

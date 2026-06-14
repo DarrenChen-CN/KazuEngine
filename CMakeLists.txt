@@ -150,6 +150,7 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/gbuffer.frag
     ${SHADER_SOURCE_DIR}/lighting.vert
     ${SHADER_SOURCE_DIR}/lighting.frag
+    ${SHADER_SOURCE_DIR}/present.frag
 )
 
 foreach(SHADER ${SHADERS})

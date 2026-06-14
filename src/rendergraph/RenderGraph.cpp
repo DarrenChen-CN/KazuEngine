@@ -4,7 +4,9 @@
 
 #include "rendergraph/RenderGraph.h"
 #include "core/Context.h"
+#include "core/Utils.h"
 #include <spdlog/spdlog.h>
+#include <algorithm>
 #include <queue>
 #include <unordered_set>
 
@@ -27,13 +29,75 @@ static VkImageAspectFlags aspectMaskFromFormat(VkFormat format) {
     }
 }
 
+static bool isReadUsage(RenderGraph::ResourceUsage usage) {
+    switch (usage) {
+    case RenderGraph::ResourceUsage::SampledRead:
+    case RenderGraph::ResourceUsage::DepthSampledRead:
+    case RenderGraph::ResourceUsage::StorageImageRead:
+    case RenderGraph::ResourceUsage::StorageBufferRead:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool isWriteUsage(RenderGraph::ResourceUsage usage) {
+    switch (usage) {
+    case RenderGraph::ResourceUsage::ColorAttachmentWrite:
+    case RenderGraph::ResourceUsage::DepthAttachmentWrite:
+    case RenderGraph::ResourceUsage::StorageImageWrite:
+    case RenderGraph::ResourceUsage::StorageBufferWrite:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static const char* resourceUsageName(RenderGraph::ResourceUsage usage) {
+    switch (usage) {
+    case RenderGraph::ResourceUsage::SampledRead: return "SampledRead";
+    case RenderGraph::ResourceUsage::ColorAttachmentWrite: return "ColorAttachmentWrite";
+    case RenderGraph::ResourceUsage::DepthAttachmentWrite: return "DepthAttachmentWrite";
+    case RenderGraph::ResourceUsage::DepthSampledRead: return "DepthSampledRead";
+    case RenderGraph::ResourceUsage::StorageImageRead: return "StorageImageRead";
+    case RenderGraph::ResourceUsage::StorageImageWrite: return "StorageImageWrite";
+    case RenderGraph::ResourceUsage::StorageBufferRead: return "StorageBufferRead";
+    case RenderGraph::ResourceUsage::StorageBufferWrite: return "StorageBufferWrite";
+    case RenderGraph::ResourceUsage::Present: return "Present";
+    default: return "Unknown";
+    }
+}
+
+static const char* imageLayoutName(VkImageLayout layout) {
+    switch (layout) {
+    case VK_IMAGE_LAYOUT_UNDEFINED: return "UNDEFINED";
+    case VK_IMAGE_LAYOUT_GENERAL: return "GENERAL";
+    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return "COLOR_ATTACHMENT_OPTIMAL";
+    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return "DEPTH_STENCIL_ATTACHMENT_OPTIMAL";
+    case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return "DEPTH_STENCIL_READ_ONLY_OPTIMAL";
+    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return "SHADER_READ_ONLY_OPTIMAL";
+    case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: return "PRESENT_SRC_KHR";
+    default: return "OTHER";
+    }
+}
+
+static const char* passTypeName(RenderGraph::PassType type) {
+    switch (type) {
+    case RenderGraph::PassType::Graphics: return "Graphics";
+    case RenderGraph::PassType::Compute: return "Compute";
+    default: return "Unknown";
+    }
+}
+
 // ============================================================================
 // Construction
 // ============================================================================
 
 RenderGraph::RenderGraph(Context& ctx) : m_ctx(&ctx) {}
 
-RenderGraph::~RenderGraph() = default;
+RenderGraph::~RenderGraph() {
+    cleanupPassRenderTargets();
+}
 
 // ============================================================================
 // Resource declaration
@@ -78,6 +142,13 @@ void RenderGraph::bindImportedTexture(ResourceHandle handle, VkImage image, VkIm
     res.externalImageView = view;
 }
 
+void RenderGraph::setImportedTextureViews(ResourceHandle handle, const std::vector<VkImageView>& views) {
+    if (handle >= m_resources.size()) return;
+    auto& res = m_resources[handle];
+    if (!res.isImported) return;
+    res.externalImageViews = views;
+}
+
 // ============================================================================
 // Pass declaration
 // ============================================================================
@@ -88,16 +159,25 @@ RenderGraph::PassHandle RenderGraph::addPass(const char* name, PassSetupFn setup
 
     PassNode node;
     node.name    = name ? name : "";
+    node.type    = builder.type;
     node.execute = builder.execute;
-    node.reads   = std::move(builder.reads);
 
-    // Flatten writes: color attachments + depth
+    // Convert the legacy builder API into explicit resource usage records.
+    for (ResourceHandle res : builder.reads) {
+        ResourceUsage usage = ResourceUsage::SampledRead;
+        if (res < m_resources.size()) {
+            const auto& resource = m_resources[res];
+            if ((resource.desc.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+                usage = ResourceUsage::DepthSampledRead;
+            }
+        }
+        node.usages.push_back({res, usage, ~0u});
+    }
     for (auto& [slot, res] : builder.writeColors) {
-        (void)slot; // slot index preserved in builder for future subpass merging
-        node.writes.push_back(res);
+        node.usages.push_back({res, ResourceUsage::ColorAttachmentWrite, slot});
     }
     if (builder.writeDepth_ != InvalidResource) {
-        node.writes.push_back(builder.writeDepth_);
+        node.usages.push_back({builder.writeDepth_, ResourceUsage::DepthAttachmentWrite, ~0u});
     }
 
     PassHandle handle = static_cast<PassHandle>(m_passes.size());
@@ -111,6 +191,7 @@ RenderGraph::PassHandle RenderGraph::addPass(const char* name, PassSetupFn setup
 
 bool RenderGraph::compile() {
     m_sortedIndices.clear();
+    cleanupPassRenderTargets();
     // Release any previously allocated transient images (keep imported resources intact)
     for (auto& res : m_resources) {
         if (!res.isImported) {
@@ -158,6 +239,8 @@ bool RenderGraph::compile() {
     // Allocate transient resources after successful topological sort
     allocateResources();
     deriveBarriers();
+    createPassRenderTargets();
+    dumpDebugInfo();
     return true;
 }
 
@@ -177,8 +260,7 @@ void RenderGraph::allocateResources() {
             if (firstPass[rh] == -1) firstPass[rh] = static_cast<int>(passIdx);
             lastPass[rh] = static_cast<int>(passIdx);
         };
-        for (ResourceHandle r : pass.reads) touch(r);
-        for (ResourceHandle w : pass.writes) touch(w);
+        for (const auto& use : pass.usages) touch(use.resource);
     }
 
     for (uint32_t i = 0; i < resCount; ++i) {
@@ -213,28 +295,54 @@ struct UsageInfo {
     VkImageLayout layout;
 };
 
-static UsageInfo getWriteUsageInfo(bool isDepth) {
-    if (isDepth) {
-        return {
-            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-        };
-    } else {
+static UsageInfo getUsageInfo(RenderGraph::ResourceUsage usage) {
+    switch (usage) {
+    case RenderGraph::ResourceUsage::ColorAttachmentWrite:
         return {
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
         };
+    case RenderGraph::ResourceUsage::DepthAttachmentWrite:
+        return {
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        };
+    case RenderGraph::ResourceUsage::DepthSampledRead:
+        return {
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_SHADER_READ_BIT,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL
+        };
+    case RenderGraph::ResourceUsage::Present:
+        return {
+            VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+            0,
+            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+        };
+    case RenderGraph::ResourceUsage::StorageImageRead:
+        return {
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_ACCESS_SHADER_READ_BIT,
+            VK_IMAGE_LAYOUT_GENERAL
+        };
+    case RenderGraph::ResourceUsage::StorageImageWrite:
+        return {
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_ACCESS_SHADER_WRITE_BIT,
+            VK_IMAGE_LAYOUT_GENERAL
+        };
+    case RenderGraph::ResourceUsage::SampledRead:
+    case RenderGraph::ResourceUsage::StorageBufferRead:
+    case RenderGraph::ResourceUsage::StorageBufferWrite:
+    default:
+        return {
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_SHADER_READ_BIT,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
     }
-}
-
-static UsageInfo getReadUsageInfo() {
-    return {
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_SHADER_READ_BIT,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-    };
 }
 
 void RenderGraph::deriveBarriers() {
@@ -274,28 +382,29 @@ void RenderGraph::deriveBarriers() {
         // Note: in the current simplified model, a resource is never both read
         // and written in the same pass. If that changes, writes should take
         // precedence (they represent the final state of the pass).
-        for (ResourceHandle rh : pass.reads) {
+        for (const auto& use : pass.usages) {
+            if (!isReadUsage(use.usage)) continue;
+            ResourceHandle rh = use.resource;
             if (rh >= m_resources.size()) continue;
             const auto& res = m_resources[rh];
             if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer
 
             const auto& oldState = states[rh];
-            UsageInfo readInfo = getReadUsageInfo();
-            bool isDepth = (res.desc.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
-            if (isDepth) readInfo.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+            UsageInfo readInfo = getUsageInfo(use.usage);
             emitBarrier(rh, oldState, readInfo);
             states[rh] = {readInfo.layout, readInfo.stage, readInfo.access};
         }
 
         // Process writes
-        for (ResourceHandle rh : pass.writes) {
+        for (const auto& use : pass.usages) {
+            if (!isWriteUsage(use.usage)) continue;
+            ResourceHandle rh = use.resource;
             if (rh >= m_resources.size()) continue;
             const auto& res = m_resources[rh];
             if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer
 
-            bool isDepth = (res.desc.usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
             const auto& oldState = states[rh];
-            UsageInfo writeInfo = getWriteUsageInfo(isDepth);
+            UsageInfo writeInfo = getUsageInfo(use.usage);
             emitBarrier(rh, oldState, writeInfo);
             states[rh] = {writeInfo.layout, writeInfo.stage, writeInfo.access};
         }
@@ -312,17 +421,175 @@ bool RenderGraph::hasDependency(uint32_t writerIdx, uint32_t readerIdx) const {
     const auto& writer = m_passes[writerIdx];
     const auto& reader = m_passes[readerIdx];
 
-    for (ResourceHandle w : writer.writes) {
-        for (ResourceHandle r : reader.reads) {
-            if (w == r) return true;
-        }
+    for (const auto& write : writer.usages) {
+        if (!isWriteUsage(write.usage)) continue;
+        ResourceHandle w = write.resource;
+        if (passReadsResource(reader, w)) return true;
         // WAW (write-after-write): second writer depends on first
         // This ensures deterministic ordering for shared outputs.
-        for (ResourceHandle rw : reader.writes) {
-            if (w == rw) return true;
-        }
+        if (passWritesResource(reader, w)) return true;
     }
     return false;
+}
+
+bool RenderGraph::passReadsResource(const PassNode& pass, ResourceHandle resource) const {
+    for (const auto& use : pass.usages) {
+        if (use.resource == resource && isReadUsage(use.usage)) return true;
+    }
+    return false;
+}
+
+bool RenderGraph::passWritesResource(const PassNode& pass, ResourceHandle resource) const {
+    for (const auto& use : pass.usages) {
+        if (use.resource == resource && isWriteUsage(use.usage)) return true;
+    }
+    return false;
+}
+
+void RenderGraph::cleanupPassRenderTargets() {
+    if (!m_ctx) return;
+    VkDevice device = m_ctx->device();
+    for (auto& pass : m_passes) {
+        for (VkFramebuffer fb : pass.framebuffers) {
+            if (fb) vkDestroyFramebuffer(device, fb, nullptr);
+        }
+        pass.framebuffers.clear();
+        if (pass.renderPass) {
+            vkDestroyRenderPass(device, pass.renderPass, nullptr);
+            pass.renderPass = VK_NULL_HANDLE;
+        }
+        pass.framebufferResources.clear();
+    }
+}
+
+void RenderGraph::createPassRenderTargets() {
+    if (!m_ctx) return;
+    VkDevice device = m_ctx->device();
+
+    for (auto& pass : m_passes) {
+        if (pass.type != PassType::Graphics) continue;
+
+        std::vector<ResourceUse> colorUses;
+        ResourceUse depthUse;
+        bool hasDepth = false;
+        for (const auto& use : pass.usages) {
+            if (use.usage == ResourceUsage::ColorAttachmentWrite) {
+                colorUses.push_back(use);
+            } else if (use.usage == ResourceUsage::DepthAttachmentWrite) {
+                depthUse = use;
+                hasDepth = true;
+            }
+        }
+        if (colorUses.empty() && !hasDepth) continue;
+
+        std::sort(colorUses.begin(), colorUses.end(),
+            [](const ResourceUse& a, const ResourceUse& b) { return a.slot < b.slot; });
+
+        std::vector<VkAttachmentDescription> attachments;
+        std::vector<VkAttachmentReference> colorRefs;
+        VkAttachmentReference depthRef{};
+        pass.framebufferResources.clear();
+
+        auto appendAttachment = [&](const ResourceUse& use, VkImageLayout layout) {
+            if (use.resource >= m_resources.size()) return;
+            const auto& res = m_resources[use.resource];
+            if (res.desc.format == VK_FORMAT_UNDEFINED) return;
+
+            VkAttachmentDescription attachment{};
+            attachment.format = res.desc.format;
+            attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            attachment.initialLayout = layout;
+            attachment.finalLayout = layout;
+
+            uint32_t attachmentIndex = static_cast<uint32_t>(attachments.size());
+            attachments.push_back(attachment);
+            pass.framebufferResources.push_back(use.resource);
+
+            if (use.usage == ResourceUsage::ColorAttachmentWrite) {
+                colorRefs.push_back({attachmentIndex, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+            } else if (use.usage == ResourceUsage::DepthAttachmentWrite) {
+                depthRef = {attachmentIndex, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+            }
+        };
+
+        for (const auto& use : colorUses) {
+            appendAttachment(use, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        }
+        if (hasDepth) {
+            appendAttachment(depthUse, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        }
+        if (attachments.empty()) continue;
+
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+        subpass.pColorAttachments = colorRefs.empty() ? nullptr : colorRefs.data();
+        subpass.pDepthStencilAttachment = hasDepth ? &depthRef : nullptr;
+
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                  VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        dependency.srcAccessMask = 0;
+        dependency.dstStageMask = dependency.srcStageMask;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                   VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        VkRenderPassCreateInfo rpInfo{};
+        rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        rpInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        rpInfo.pAttachments = attachments.data();
+        rpInfo.subpassCount = 1;
+        rpInfo.pSubpasses = &subpass;
+        rpInfo.dependencyCount = 1;
+        rpInfo.pDependencies = &dependency;
+        VK_CHECK(vkCreateRenderPass(device, &rpInfo, nullptr, &pass.renderPass));
+
+        uint32_t framebufferCount = 1;
+        for (ResourceHandle rh : pass.framebufferResources) {
+            const auto& res = m_resources[rh];
+            if (res.isImported && !res.externalImageViews.empty()) {
+                framebufferCount = std::max(framebufferCount,
+                                            static_cast<uint32_t>(res.externalImageViews.size()));
+            }
+        }
+        pass.framebuffers.resize(framebufferCount, VK_NULL_HANDLE);
+
+        VkExtent2D extent{};
+        for (ResourceHandle rh : pass.framebufferResources) {
+            extent = getImageExtent(rh);
+            if (extent.width != 0 && extent.height != 0) break;
+        }
+
+        for (uint32_t framebufferIndex = 0; framebufferIndex < framebufferCount; ++framebufferIndex) {
+            std::vector<VkImageView> views;
+            views.reserve(pass.framebufferResources.size());
+            for (ResourceHandle rh : pass.framebufferResources) {
+                const auto& res = m_resources[rh];
+                if (res.isImported && framebufferIndex < res.externalImageViews.size()) {
+                    views.push_back(res.externalImageViews[framebufferIndex]);
+                } else {
+                    views.push_back(getImageView(rh));
+                }
+            }
+
+            VkFramebufferCreateInfo fbInfo{};
+            fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            fbInfo.renderPass = pass.renderPass;
+            fbInfo.attachmentCount = static_cast<uint32_t>(views.size());
+            fbInfo.pAttachments = views.data();
+            fbInfo.width = extent.width;
+            fbInfo.height = extent.height;
+            fbInfo.layers = 1;
+            VK_CHECK(vkCreateFramebuffer(device, &fbInfo, nullptr, &pass.framebuffers[framebufferIndex]));
+        }
+    }
 }
 
 // ============================================================================
@@ -384,6 +651,71 @@ void RenderGraph::execute(VkCommandBuffer cmd) const {
     }
 }
 
+void RenderGraph::dumpDebugInfo() const {
+    spdlog::info("[RenderGraph] ===== Debug Dump =====");
+    spdlog::info("[RenderGraph] Resources: {}", m_resources.size());
+    for (uint32_t i = 0; i < m_resources.size(); ++i) {
+        const auto& res = m_resources[i];
+        const char* kind = res.desc.format == VK_FORMAT_UNDEFINED
+            ? "buffer"
+            : (res.isImported ? "imported-texture" : "transient-texture");
+        spdlog::info("[RenderGraph]   #{} '{}' kind={} extent={}x{} format={} usage=0x{:x} allocated={}",
+                     i,
+                     res.name,
+                     kind,
+                     res.desc.width,
+                     res.desc.height,
+                     static_cast<int>(res.desc.format),
+                     static_cast<uint32_t>(res.desc.usage),
+                     (res.isImported || res.image) ? "yes" : "no");
+    }
+
+    spdlog::info("[RenderGraph] Pass order: {}", m_sortedIndices.size());
+    for (uint32_t order = 0; order < m_sortedIndices.size(); ++order) {
+        uint32_t passIdx = m_sortedIndices[order];
+        const auto& pass = m_passes[passIdx];
+        spdlog::info("[RenderGraph]   [{}] pass #{} '{}' type={} uses={} preBarriers={} renderPass={} framebuffers={}",
+                     order,
+                     passIdx,
+                     pass.name,
+                     passTypeName(pass.type),
+                     pass.usages.size(),
+                     pass.preBarrier.descs.size(),
+                     pass.renderPass ? "yes" : "no",
+                     pass.framebuffers.size());
+
+        for (const auto& use : pass.usages) {
+            const char* resName = getResourceName(use.resource);
+            if (use.slot != ~0u) {
+                spdlog::info("[RenderGraph]       use {} resource #{} '{}' slot={}",
+                             resourceUsageName(use.usage),
+                             use.resource,
+                             resName ? resName : "<invalid>",
+                             use.slot);
+            } else {
+                spdlog::info("[RenderGraph]       use {} resource #{} '{}'",
+                             resourceUsageName(use.usage),
+                             use.resource,
+                             resName ? resName : "<invalid>");
+            }
+        }
+
+        for (const auto& barrier : pass.preBarrier.descs) {
+            const char* resName = getResourceName(barrier.resource);
+            spdlog::info("[RenderGraph]       barrier #{} '{}' {} -> {} stage 0x{:x}->0x{:x} access 0x{:x}->0x{:x}",
+                         barrier.resource,
+                         resName ? resName : "<invalid>",
+                         imageLayoutName(barrier.oldLayout),
+                         imageLayoutName(barrier.newLayout),
+                         static_cast<uint32_t>(barrier.srcStage),
+                         static_cast<uint32_t>(barrier.dstStage),
+                         static_cast<uint32_t>(barrier.srcAccess),
+                         static_cast<uint32_t>(barrier.dstAccess));
+        }
+    }
+    spdlog::info("[RenderGraph] ======================");
+}
+
 // ============================================================================
 // Queries
 // ============================================================================
@@ -428,7 +760,21 @@ VkFormat RenderGraph::getImageFormat(ResourceHandle handle) const {
     return res.desc.format;
 }
 
+VkRenderPass RenderGraph::getRenderPass(PassHandle handle) const {
+    if (handle >= m_passes.size()) return VK_NULL_HANDLE;
+    return m_passes[handle].renderPass;
+}
+
+VkFramebuffer RenderGraph::getFramebuffer(PassHandle handle, uint32_t imageIndex) const {
+    if (handle >= m_passes.size()) return VK_NULL_HANDLE;
+    const auto& framebuffers = m_passes[handle].framebuffers;
+    if (framebuffers.empty()) return VK_NULL_HANDLE;
+    uint32_t index = imageIndex < framebuffers.size() ? imageIndex : 0;
+    return framebuffers[index];
+}
+
 void RenderGraph::clear() {
+    cleanupPassRenderTargets();
     m_resources.clear();
     m_passes.clear();
     m_sortedIndices.clear();

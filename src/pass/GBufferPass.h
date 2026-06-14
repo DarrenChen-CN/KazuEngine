@@ -33,7 +33,6 @@ public:
     RenderGraph::ResourceHandle materialHandle() const { return m_materialHandle; }
     RenderGraph::ResourceHandle depthHandle() const   { return m_depthHandle; }
 
-    VkRenderPass renderPass() const { return m_renderPass; }
     ShaderEffect* shaderEffect() const { return m_effect; }
 
 private:
@@ -45,9 +44,9 @@ private:
     RenderGraph::ResourceHandle m_normalHandle  = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_materialHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_depthHandle   = RenderGraph::InvalidResource;
+    RenderGraph* m_renderGraph = nullptr;
+    RenderGraph::PassHandle m_passHandle = 0;
 
-    VkRenderPass     m_renderPass     = VK_NULL_HANDLE;
-    VkFramebuffer    m_framebuffer    = VK_NULL_HANDLE;
     ShaderEffect*    m_effect         = nullptr;
 };
 

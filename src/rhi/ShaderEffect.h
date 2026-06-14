@@ -46,6 +46,7 @@ public:
                                      DescriptorSetLayoutCache& dslCache,
                                      PipelineCache& pipeCache,
                                      const Key& key);
+    static void clearCache();
 
     // Accessors
     VkPipeline pipeline() const;
