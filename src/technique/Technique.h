@@ -22,7 +22,12 @@ public:
     virtual ~Technique() = default;
 
     virtual const char* name() const = 0;
-    virtual void init(RHI* rhi, Scene* scene, Camera* camera) = 0;
+    void init(RHI* rhi, Scene* scene, Camera* camera) {
+        m_rhi = rhi;
+        m_scene = scene;
+        m_camera = camera;
+        onInit();
+    }
 
     virtual void setCurrentImageIndex(uint32_t imageIndex) = 0;
     virtual void bindSwapchainImage(uint32_t imageIndex) = 0;
@@ -36,6 +41,13 @@ public:
         (void)mods;
         return false;
     }
+
+protected:
+    virtual void onInit() = 0;
+
+    RHI* m_rhi = nullptr;
+    Scene* m_scene = nullptr;
+    Camera* m_camera = nullptr;
 };
 
 } // namespace kazu

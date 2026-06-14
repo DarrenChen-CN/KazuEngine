@@ -24,11 +24,7 @@ DeferredShading::~DeferredShading() {
     vkDeviceWaitIdle(m_rhi->ctx().device());
 }
 
-void DeferredShading::init(RHI* rhi, Scene* scene, Camera* camera) {
-    m_rhi = rhi;
-    m_scene = scene;
-    m_camera = camera;
-
+void DeferredShading::onInit() {
     // ---- Phase 1: Declare ----
     m_renderGraph = std::make_unique<RenderGraph>(m_rhi->ctx());
 

@@ -27,7 +27,6 @@ public:
     ~DeferredShading();
 
     const char* name() const override { return "Deferred Shading"; }
-    void init(RHI* rhi, Scene* scene, Camera* camera) override;
     RenderGraph* renderGraph() const { return m_renderGraph.get(); }
 
     void setDisplayMode(int mode);
@@ -50,9 +49,8 @@ public:
     bool onKey(int key, int scancode, int action, int mods) override;
 
 private:
-    RHI*   m_rhi   = nullptr;
-    Scene* m_scene = nullptr;
-    Camera* m_camera = nullptr;
+    void onInit() override;
+
     int    m_displayMode = 0;
     uint32_t m_currentImageIndex = 0;
 
