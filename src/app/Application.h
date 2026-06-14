@@ -14,7 +14,7 @@ namespace kazu {
 class RHI;
 class Scene;
 class Camera;
-class DeferredShading;
+class Technique;
 class AppUI;
 
 class Application {
@@ -50,7 +50,7 @@ private:
     std::unique_ptr<RHI> m_rhi;
     std::unique_ptr<Scene> m_scene;
     std::unique_ptr<Camera> m_camera;
-    std::unique_ptr<DeferredShading> m_deferred;
+    std::unique_ptr<Technique> m_technique;
     std::unique_ptr<AppUI> m_appUI;
 
     // Mouse input state

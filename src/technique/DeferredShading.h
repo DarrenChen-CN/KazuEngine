@@ -8,8 +8,8 @@
 #pragma once
 
 #include <memory>
-#include "app/AppUI.h"
 #include "rendergraph/RenderGraph.h"
+#include "technique/Technique.h"
 
 namespace kazu {
 
@@ -21,21 +21,23 @@ class GBufferPass;
 class LightingPass;
 class PresentPass;
 
-class DeferredShading {
+class DeferredShading : public Technique {
 public:
     DeferredShading();
     ~DeferredShading();
 
-    void init(RHI* rhi, Scene* scene, Camera* camera);
+    const char* name() const override { return "Deferred Shading"; }
+    void init(RHI* rhi, Scene* scene, Camera* camera) override;
     RenderGraph* renderGraph() const { return m_renderGraph.get(); }
 
     void setDisplayMode(int mode);
     int  displayMode() const { return m_displayMode; }
 
-    void setCurrentImageIndex(uint32_t idx);
+    void setCurrentImageIndex(uint32_t idx) override;
 
     // Bind the current swapchain image to the imported resource before execute
-    void bindSwapchainImage(uint32_t imageIndex);
+    void bindSwapchainImage(uint32_t imageIndex) override;
+    void render(VkCommandBuffer cmd) override;
 
     // Expose GBuffer outputs for downstream passes / external techniques
     RenderGraph::ResourceHandle albedoHandle() const;
@@ -44,7 +46,8 @@ public:
     RenderGraph::ResourceHandle depthHandle() const;
 
     // Build panel description for AppUI (zero ImGui dependency)
-    void exposePanel(PanelDesc& desc);
+    void exposePanel(PanelDesc& desc) override;
+    bool onKey(int key, int scancode, int action, int mods) override;
 
 private:
     RHI*   m_rhi   = nullptr;

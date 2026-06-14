@@ -12,6 +12,7 @@
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
+#include <GLFW/glfw3.h>
 #include <vector>
 
 namespace kazu {
@@ -91,6 +92,12 @@ void DeferredShading::bindSwapchainImage(uint32_t imageIndex) {
     }
 }
 
+void DeferredShading::render(VkCommandBuffer cmd) {
+    if (m_renderGraph) {
+        m_renderGraph->execute(cmd);
+    }
+}
+
 void DeferredShading::exposePanel(PanelDesc& desc) {
     desc.name = "Deferred Shading";
     static const char* modes[] = {"Lighting", "Albedo", "Normal"};
@@ -118,6 +125,18 @@ void DeferredShading::setCurrentImageIndex(uint32_t idx) {
     if (m_presentPass) {
         m_presentPass->setCurrentImageIndex(idx);
     }
+}
+
+bool DeferredShading::onKey(int key, int scancode, int action, int mods) {
+    (void)scancode;
+    (void)mods;
+    if (key != GLFW_KEY_D || action != GLFW_PRESS) return false;
+
+    int mode = (displayMode() + 1) % 3;
+    setDisplayMode(mode);
+    const char* modeName = (mode == 0) ? "lighting" : (mode == 1) ? "albedo" : "normal";
+    spdlog::info("Display mode: {}", modeName);
+    return true;
 }
 
 RenderGraph::ResourceHandle DeferredShading::albedoHandle() const {

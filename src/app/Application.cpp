@@ -8,6 +8,7 @@
 #include "rhi/RHI.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
+#include "technique/Technique.h"
 #include "technique/DeferredShading.h"
 #include <spdlog/spdlog.h>
 
@@ -62,8 +63,8 @@ bool Application::init() {
     m_camera->setTarget(cfg.cameraTarget);
     m_camera->setUp(cfg.cameraUp);
 
-    m_deferred = std::make_unique<DeferredShading>();
-    m_deferred->init(m_rhi.get(), m_scene.get(), m_camera.get());
+    m_technique = std::make_unique<DeferredShading>();
+    m_technique->init(m_rhi.get(), m_scene.get(), m_camera.get());
 
     m_appUI = std::make_unique<AppUI>();
     m_appUI->init(m_rhi.get(), m_window);
@@ -79,7 +80,7 @@ void Application::run() {
         uint32_t imageIndex = 0;
         if (!m_rhi->beginFrame(imageIndex)) {
             if (m_appUI) m_appUI->onResize();
-            if (m_deferred) m_deferred->init(m_rhi.get(), m_scene.get(), m_camera.get());
+            if (m_technique) m_technique->init(m_rhi.get(), m_scene.get(), m_camera.get());
             continue;
         }
 
@@ -90,20 +91,20 @@ void Application::run() {
 
 void Application::cleanup() {
     m_appUI.reset();
-    m_deferred.reset();
+    m_technique.reset();
     m_camera.reset();
     m_scene.reset();
     m_rhi.reset();
 }
 
 void Application::recordFrame(uint32_t imageIndex) {
-    m_deferred->setCurrentImageIndex(imageIndex);
-    m_deferred->bindSwapchainImage(imageIndex);
-    m_deferred->renderGraph()->execute(m_rhi->currentCmd());
+    m_technique->setCurrentImageIndex(imageIndex);
+    m_technique->bindSwapchainImage(imageIndex);
+    m_technique->render(m_rhi->currentCmd());
 
     m_appUI->beginFrame();
     PanelDesc desc;
-    m_deferred->exposePanel(desc);
+    m_technique->exposePanel(desc);
     m_appUI->drawPanel(desc);
     m_appUI->endFrame(m_rhi->currentCmd(), imageIndex);
 }
@@ -113,13 +114,7 @@ void Application::recordFrame(uint32_t imageIndex) {
 // ---------------------------------------------------------------------------
 
 void Application::onKey(int key, int scancode, int action, int mods) {
-    (void)scancode; (void)mods;
-    if (key == GLFW_KEY_D && action == GLFW_PRESS && m_deferred) {
-        int mode = (m_deferred->displayMode() + 1) % 3;
-        m_deferred->setDisplayMode(mode);
-        const char* name = (mode == 0) ? "lighting" : (mode == 1) ? "albedo" : "normal";
-        spdlog::info("Display mode: {}", name);
-    }
+    if (m_technique && m_technique->onKey(key, scancode, action, mods)) return;
 }
 
 void Application::onMouseButton(int button, int action, int mods) {
