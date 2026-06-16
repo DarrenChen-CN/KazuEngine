@@ -27,7 +27,7 @@ public:
     void setInput(RenderGraph::ResourceHandle sceneColor) { m_sceneColorHandle = sceneColor; }
     void setSwapchainHandle(RenderGraph::ResourceHandle swapchain) { m_swapchainHandle = swapchain; }
 
-    void execute(VkCommandBuffer cmd);
+    void execute(VkCommandBuffer cmd) override;
 
 private:
     RHI* m_rhi = nullptr;

@@ -106,16 +106,11 @@ void Scene::buildMaterials(Context& ctx, ShaderEffect* effect,
 }
 
 void Scene::draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
-                    const glm::mat4& viewProj, const glm::vec4& lightPos,
-                    const glm::vec4& viewPos, int displayMode) {
+                    const InstanceDrawFn& beforeDraw) {
     for (auto& inst : m_instances) {
-        GBufferPush push{};
-        push.mvp = viewProj * inst.transform;
-        push.lightPos = lightPos;
-        push.viewPos = viewPos;
-        push.displayMode = displayMode;
-        vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                           0, sizeof(GBufferPush), &push);
+        if (beforeDraw) {
+            beforeDraw(cmd, pipelineLayout, inst);
+        }
 
         if (inst.material) {
             inst.material->bind(cmd, pipelineLayout);

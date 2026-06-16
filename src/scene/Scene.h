@@ -16,6 +16,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <functional>
 
 namespace kazu {
 
@@ -28,15 +29,6 @@ struct SceneConfig {
     glm::vec3 lightPos{2.0f, 3.0f, 2.0f};
     uint32_t windowWidth = 1280;
     uint32_t windowHeight = 720;
-};
-
-// Shared push constant layout between GBufferPass and Scene::draw
-struct GBufferPush {
-    glm::mat4 mvp;
-    glm::vec4 lightPos;
-    glm::vec4 viewPos;
-    int displayMode;
-    int _pad[3];
 };
 
 struct ModelInstance {
@@ -53,16 +45,17 @@ struct ModelInstance {
 
 class Scene {
 public:
+    using InstanceDrawFn = std::function<void(VkCommandBuffer, VkPipelineLayout, const ModelInstance&)>;
+
     void loadFromFile(Context& ctx, const std::string& scenePath);
 
     // Build materials after ShaderEffect is ready (called by Pass/Technique layer)
     void buildMaterials(Context& ctx, ShaderEffect* effect,
                         DescriptorSetLayoutCache& dslCache);
 
-    // Per-instance draw: updates push constants (mvp = viewProj * transform) for each instance
+    // Per-instance draw: caller records pass-specific per-instance state before mesh draw.
     void draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
-              const glm::mat4& viewProj, const glm::vec4& lightPos,
-              const glm::vec4& viewPos, int displayMode);
+              const InstanceDrawFn& beforeDraw);
 
     const SceneConfig& config() const { return m_config; }
     const DirectionalLight& directionalLight() const { return m_directionalLight; }

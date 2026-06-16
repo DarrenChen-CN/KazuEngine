@@ -24,8 +24,7 @@ public:
     void declare(RHI* rhi, RenderGraph* rg) override;
     void create(Scene* scene, Camera* camera, RenderGraph* rg) override;
 
-    // Called by RenderGraph execute lambda
-    void execute(VkCommandBuffer cmd);
+    void execute(VkCommandBuffer cmd) override;
 
     // Output handles for downstream passes to reference
     RenderGraph::ResourceHandle albedoHandle() const  { return m_albedoHandle; }

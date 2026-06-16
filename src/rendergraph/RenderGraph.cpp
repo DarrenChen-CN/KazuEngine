@@ -108,6 +108,7 @@ RenderGraph::ResourceHandle RenderGraph::addTexture(const char* name, const Text
     ResourceNode node;
     node.name = name ? name : "";
     node.desc = desc;
+    node.ownership = ResourceOwnership::Transient;
     m_resources.push_back(std::move(node));
     return handle;
 }
@@ -117,6 +118,7 @@ RenderGraph::ResourceHandle RenderGraph::addBuffer(const char* name) {
     ResourceNode node;
     node.name = name ? name : "";
     // desc defaults keep format=UNDEFINED, marking this as a buffer
+    node.ownership = ResourceOwnership::Transient;
     m_resources.push_back(std::move(node));
     return handle;
 }
@@ -127,9 +129,9 @@ RenderGraph::ResourceHandle RenderGraph::addImportedTexture(const char* name, co
     ResourceNode node;
     node.name = name ? name : "";
     node.desc = desc;
-    node.isImported = true;
-    node.externalImage = image;
-    node.externalImageView = view;
+    node.ownership = ResourceOwnership::Imported;
+    node.imported.currentImage = image;
+    node.imported.currentView = view;
     m_resources.push_back(std::move(node));
     return handle;
 }
@@ -137,16 +139,16 @@ RenderGraph::ResourceHandle RenderGraph::addImportedTexture(const char* name, co
 void RenderGraph::bindImportedTexture(ResourceHandle handle, VkImage image, VkImageView view) {
     if (handle >= m_resources.size()) return;
     auto& res = m_resources[handle];
-    if (!res.isImported) return;
-    res.externalImage = image;
-    res.externalImageView = view;
+    if (res.ownership != ResourceOwnership::Imported) return;
+    res.imported.currentImage = image;
+    res.imported.currentView = view;
 }
 
 void RenderGraph::setImportedTextureViews(ResourceHandle handle, const std::vector<VkImageView>& views) {
     if (handle >= m_resources.size()) return;
     auto& res = m_resources[handle];
-    if (!res.isImported) return;
-    res.externalImageViews = views;
+    if (res.ownership != ResourceOwnership::Imported) return;
+    res.imported.allViews = views;
 }
 
 // ============================================================================
@@ -194,8 +196,8 @@ bool RenderGraph::compile() {
     cleanupPassRenderTargets();
     // Release any previously allocated transient images (keep imported resources intact)
     for (auto& res : m_resources) {
-        if (!res.isImported) {
-            res.image.reset();
+        if (res.ownership == ResourceOwnership::Transient) {
+            res.ownedImage.reset();
         }
     }
 
@@ -265,16 +267,16 @@ void RenderGraph::allocateResources() {
 
     for (uint32_t i = 0; i < resCount; ++i) {
         auto& res = m_resources[i];
-        if (res.isImported) continue; // externally managed
+        if (res.ownership == ResourceOwnership::Imported) continue; // externally managed
         if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer, not texture
         if (firstPass[i] == -1) continue; // unused, don't allocate
 
-        res.image = std::make_unique<Image>(*m_ctx,
-                                            res.desc.width,
-                                            res.desc.height,
-                                            res.desc.format,
-                                            res.desc.usage,
-                                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        res.ownedImage = std::make_unique<Image>(*m_ctx,
+                                                 res.desc.width,
+                                                 res.desc.height,
+                                                 res.desc.format,
+                                                 res.desc.usage,
+                                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     }
 }
 
@@ -554,9 +556,9 @@ void RenderGraph::createPassRenderTargets() {
         uint32_t framebufferCount = 1;
         for (ResourceHandle rh : pass.framebufferResources) {
             const auto& res = m_resources[rh];
-            if (res.isImported && !res.externalImageViews.empty()) {
+            if (res.ownership == ResourceOwnership::Imported && !res.imported.allViews.empty()) {
                 framebufferCount = std::max(framebufferCount,
-                                            static_cast<uint32_t>(res.externalImageViews.size()));
+                                            static_cast<uint32_t>(res.imported.allViews.size()));
             }
         }
         pass.framebuffers.resize(framebufferCount, VK_NULL_HANDLE);
@@ -572,8 +574,9 @@ void RenderGraph::createPassRenderTargets() {
             views.reserve(pass.framebufferResources.size());
             for (ResourceHandle rh : pass.framebufferResources) {
                 const auto& res = m_resources[rh];
-                if (res.isImported && framebufferIndex < res.externalImageViews.size()) {
-                    views.push_back(res.externalImageViews[framebufferIndex]);
+                if (res.ownership == ResourceOwnership::Imported &&
+                    framebufferIndex < res.imported.allViews.size()) {
+                    views.push_back(res.imported.allViews[framebufferIndex]);
                 } else {
                     views.push_back(getImageView(rh));
                 }
@@ -609,10 +612,10 @@ void RenderGraph::execute(VkCommandBuffer cmd) const {
             for (const auto& desc : pass.preBarrier.descs) {
                 const auto& res = m_resources[desc.resource];
                 VkImage image = VK_NULL_HANDLE;
-                if (res.isImported) {
-                    image = res.externalImage;
-                } else if (res.image) {
-                    image = res.image->handle();
+                if (res.ownership == ResourceOwnership::Imported) {
+                    image = res.imported.currentImage;
+                } else if (res.ownedImage) {
+                    image = res.ownedImage->handle();
                 }
                 if (image == VK_NULL_HANDLE) continue;
 
@@ -658,7 +661,7 @@ void RenderGraph::dumpDebugInfo() const {
         const auto& res = m_resources[i];
         const char* kind = res.desc.format == VK_FORMAT_UNDEFINED
             ? "buffer"
-            : (res.isImported ? "imported-texture" : "transient-texture");
+            : (res.ownership == ResourceOwnership::Imported ? "imported-texture" : "transient-texture");
         spdlog::info("[RenderGraph]   #{} '{}' kind={} extent={}x{} format={} usage=0x{:x} allocated={}",
                      i,
                      res.name,
@@ -667,7 +670,7 @@ void RenderGraph::dumpDebugInfo() const {
                      res.desc.height,
                      static_cast<int>(res.desc.format),
                      static_cast<uint32_t>(res.desc.usage),
-                     (res.isImported || res.image) ? "yes" : "no");
+                     (res.ownership == ResourceOwnership::Imported || res.ownedImage) ? "yes" : "no");
     }
 
     spdlog::info("[RenderGraph] Pass order: {}", m_sortedIndices.size());
@@ -733,25 +736,25 @@ const char* RenderGraph::getPassName(PassHandle handle) const {
 VkImage RenderGraph::getImageHandle(ResourceHandle handle) const {
     if (handle >= m_resources.size()) return VK_NULL_HANDLE;
     const auto& res = m_resources[handle];
-    if (res.isImported) return res.externalImage;
-    if (!res.image) return VK_NULL_HANDLE;
-    return res.image->handle();
+    if (res.ownership == ResourceOwnership::Imported) return res.imported.currentImage;
+    if (!res.ownedImage) return VK_NULL_HANDLE;
+    return res.ownedImage->handle();
 }
 
 VkImageView RenderGraph::getImageView(ResourceHandle handle) const {
     if (handle >= m_resources.size()) return VK_NULL_HANDLE;
     const auto& res = m_resources[handle];
-    if (res.isImported) return res.externalImageView;
-    if (!res.image) return VK_NULL_HANDLE;
-    return res.image->view();
+    if (res.ownership == ResourceOwnership::Imported) return res.imported.currentView;
+    if (!res.ownedImage) return VK_NULL_HANDLE;
+    return res.ownedImage->view();
 }
 
 VkExtent2D RenderGraph::getImageExtent(ResourceHandle handle) const {
     if (handle >= m_resources.size()) return {};
     const auto& res = m_resources[handle];
-    if (res.isImported) return {res.desc.width, res.desc.height};
-    if (!res.image) return {};
-    return res.image->extent();
+    if (res.ownership == ResourceOwnership::Imported) return {res.desc.width, res.desc.height};
+    if (!res.ownedImage) return {};
+    return res.ownedImage->extent();
 }
 
 VkFormat RenderGraph::getImageFormat(ResourceHandle handle) const {

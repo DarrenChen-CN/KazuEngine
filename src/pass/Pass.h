@@ -6,6 +6,7 @@
 // ============================================================================
 
 #pragma once
+#include <vulkan/vulkan.h>
 
 namespace kazu {
 
@@ -26,6 +27,9 @@ public:
 
     // Phase 2: create VK objects after rg->compile() (ImageViews are now valid)
     virtual void create(Scene* scene, Camera* camera, RenderGraph* rg) = 0;
+
+    // Phase 3: record this pass into the current command buffer.
+    virtual void execute(VkCommandBuffer cmd) = 0;
 };
 
 } // namespace kazu

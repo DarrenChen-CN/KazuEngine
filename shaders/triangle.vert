@@ -10,9 +10,6 @@ layout(location = 2) out vec2 fragTexCoord;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
-    vec4 lightPos;
-    vec4 viewPos;
-    int displayMode;
 } pc;
 
 void main() {

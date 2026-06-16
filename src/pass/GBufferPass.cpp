@@ -16,6 +16,14 @@
 
 namespace kazu {
 
+namespace {
+
+struct GBufferPush {
+    glm::mat4 mvp;
+};
+
+} // anonymous namespace
+
 GBufferPass::GBufferPass() = default;
 
 GBufferPass::~GBufferPass() = default;
@@ -86,7 +94,7 @@ void GBufferPass::execute(VkCommandBuffer cmd) {
     rpInfo.renderArea.extent = m_rhi->extent();
     std::array<VkClearValue, 4> clears{};
     clears[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
-    clears[1].color = {{0.5f, 0.5f, 1.0f, 1.0f}};
+    clears[1].color = {{0.5f, 0.5f, 1.0f, 1.0f}}; // Normal buffer default to flat blue (0,0,1)
     clears[2].color = {{0.0f, 0.5f, 1.0f, 1.0f}};
     clears[3].depthStencil = {1.0f, 0};
     rpInfo.clearValueCount = 4;
@@ -106,11 +114,14 @@ void GBufferPass::execute(VkCommandBuffer cmd) {
 
     glm::mat4 viewProj = m_camera->getProjectionMatrix(m_rhi->aspect())
                        * m_camera->getViewMatrix();
-    glm::vec4 lightPos = glm::vec4(m_scene->config().lightPos, 0.0f);
-    glm::vec4 viewPos = glm::vec4(m_camera->position(), 0.0f);
 
     m_scene->draw(cmd, m_effect->pipelineLayout(),
-                  viewProj, lightPos, viewPos, 0);
+        [&](VkCommandBuffer drawCmd, VkPipelineLayout layout, const ModelInstance& inst) {
+            GBufferPush push{};
+            push.mvp = viewProj * inst.transform;
+            vkCmdPushConstants(drawCmd, layout, VK_SHADER_STAGE_VERTEX_BIT,
+                               0, sizeof(GBufferPush), &push);
+        });
     vkCmdEndRenderPass(cmd);
 }
 

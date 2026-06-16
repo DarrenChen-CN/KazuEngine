@@ -133,14 +133,23 @@ public:
     void clear();
 
 private:
+    enum class ResourceOwnership {
+        Transient,
+        Imported
+    };
+
+    struct ImportedTexture {
+        VkImage currentImage = VK_NULL_HANDLE;
+        VkImageView currentView = VK_NULL_HANDLE;
+        std::vector<VkImageView> allViews;
+    };
+
     struct ResourceNode {
         std::string name;
         TextureDesc desc;              // valid only for textures (format != UNDEFINED)
-        std::unique_ptr<Image> image;  // allocated after compile() (null for imported)
-        bool isImported = false;
-        VkImage externalImage = VK_NULL_HANDLE;
-        VkImageView externalImageView = VK_NULL_HANDLE;
-        std::vector<VkImageView> externalImageViews;
+        ResourceOwnership ownership = ResourceOwnership::Transient;
+        std::unique_ptr<Image> ownedImage; // allocated after compile() for transient textures
+        ImportedTexture imported;          // valid only when ownership == Imported
     };
 
     // Barrier description (image handle is resolved at execute time)

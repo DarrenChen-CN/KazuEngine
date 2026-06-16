@@ -28,8 +28,7 @@ public:
     void setCurrentImageIndex(uint32_t idx) { m_currentImageIndex = idx; }
     void setDisplayMode(int mode) { m_displayMode = mode; }
 
-    // Called by RenderGraph execute lambda
-    void execute(VkCommandBuffer cmd);
+    void execute(VkCommandBuffer cmd) override;
 
     // Set GBuffer input handles (called before declare)
     void setInputs(RenderGraph::ResourceHandle albedo,
