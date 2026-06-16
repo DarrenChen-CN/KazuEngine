@@ -22,9 +22,9 @@ public:
     // Pass interface
     const char* name() const override { return "GBuffer"; }
     void declare(RHI* rhi, RenderGraph* rg) override;
-    void create(Scene* scene, Camera* camera, RenderGraph* rg) override;
+    void create(const PassCreateContext& ctx) override;
 
-    void execute(VkCommandBuffer cmd, uint32_t imageIndex) override;
+    void execute(const PassExecuteContext& ctx) override;
 
     // Output handles for downstream passes to reference
     RenderGraph::ResourceHandle albedoHandle() const  { return m_albedoHandle; }

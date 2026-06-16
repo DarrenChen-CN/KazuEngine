@@ -64,14 +64,20 @@ void DeferredShading::onInit() {
     }
 
     // ---- Phase 3: Create VK objects ----
-    m_gbufferPass->create(m_scene, m_camera, m_renderGraph.get());
+    PassCreateContext passCtx{};
+    passCtx.rhi = m_rhi;
+    passCtx.renderGraph = m_renderGraph.get();
+    passCtx.scene = m_scene;
+    passCtx.camera = m_camera;
+
+    m_gbufferPass->create(passCtx);
 
     // Build scene materials now that ShaderEffect is ready
     m_scene->buildMaterials(m_rhi->ctx(), m_gbufferPass->shaderEffect(),
                             m_rhi->dslCache());
 
-    m_lightingPass->create(m_scene, m_camera, m_renderGraph.get());
-    m_presentPass->create(m_scene, m_camera, m_renderGraph.get());
+    m_lightingPass->create(passCtx);
+    m_presentPass->create(passCtx);
 
     // Restore display mode after resize re-init
     m_lightingPass->setDisplayMode(m_displayMode);

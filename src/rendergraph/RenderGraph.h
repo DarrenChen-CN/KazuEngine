@@ -18,6 +18,7 @@
 #include <memory>
 
 #include "core/Image.h"
+#include "pass/Pass.h"
 
 namespace kazu {
 
@@ -92,7 +93,7 @@ public:
             writeDepth_ = resource;
         }
 
-        std::function<void(VkCommandBuffer, uint32_t)> execute;
+        std::function<void(const PassExecuteContext&)> execute;
         std::vector<ResourceHandle> reads;
         std::vector<std::pair<uint32_t, ResourceHandle>> writeColors;
         ResourceHandle writeDepth_ = InvalidResource;
@@ -172,7 +173,7 @@ private:
     struct PassNode {
         std::string name;
         PassType type = PassType::Graphics;
-        std::function<void(VkCommandBuffer, uint32_t)> execute;
+        std::function<void(const PassExecuteContext&)> execute;
         std::vector<ResourceUse> usages;
         BarrierBatch preBarrier;            // filled by deriveBarriers()
         std::vector<ResourceHandle> framebufferResources;

@@ -15,6 +15,18 @@ class Scene;
 class Camera;
 class RenderGraph;
 
+struct PassCreateContext {
+    RHI* rhi = nullptr;
+    RenderGraph* renderGraph = nullptr;
+    Scene* scene = nullptr;
+    Camera* camera = nullptr;
+};
+
+struct PassExecuteContext {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    uint32_t imageIndex = 0;
+};
+
 class Pass {
 public:
     virtual ~Pass() = default;
@@ -26,10 +38,10 @@ public:
     virtual void declare(RHI* rhi, RenderGraph* rg) = 0;
 
     // Phase 2: create VK objects after rg->compile() (ImageViews are now valid)
-    virtual void create(Scene* scene, Camera* camera, RenderGraph* rg) = 0;
+    virtual void create(const PassCreateContext& ctx) = 0;
 
     // Phase 3: record this pass into the current command buffer.
-    virtual void execute(VkCommandBuffer cmd, uint32_t imageIndex) = 0;
+    virtual void execute(const PassExecuteContext& ctx) = 0;
 };
 
 } // namespace kazu

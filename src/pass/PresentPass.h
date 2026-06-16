@@ -21,12 +21,12 @@ public:
 
     const char* name() const override { return "Present"; }
     void declare(RHI* rhi, RenderGraph* rg) override;
-    void create(Scene* scene, Camera* camera, RenderGraph* rg) override;
+    void create(const PassCreateContext& ctx) override;
 
     void setInput(RenderGraph::ResourceHandle sceneColor) { m_sceneColorHandle = sceneColor; }
     void setSwapchainHandle(RenderGraph::ResourceHandle swapchain) { m_swapchainHandle = swapchain; }
 
-    void execute(VkCommandBuffer cmd, uint32_t imageIndex) override;
+    void execute(const PassExecuteContext& ctx) override;
 
 private:
     RHI* m_rhi = nullptr;

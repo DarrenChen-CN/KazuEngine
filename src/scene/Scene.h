@@ -59,10 +59,14 @@ public:
 
     const SceneConfig& config() const { return m_config; }
     const DirectionalLight& directionalLight() const { return m_directionalLight; }
+    const std::vector<PointLight>& pointLights() const { return m_pointLights; }
+    const std::vector<Light*>& lights() const { return m_lights; }
 
 private:
     SceneConfig m_config;
     DirectionalLight m_directionalLight;
+    std::vector<PointLight> m_pointLights;
+    std::vector<Light*> m_lights;
 
     // Resource pools (Scene owns the lifetime)
     std::vector<std::unique_ptr<Mesh>> m_meshes;
@@ -86,6 +90,7 @@ private:
                         const std::vector<Vertex>& vertices,
                         const std::vector<uint32_t>& indices);
     Texture* getOrLoadTexture(Context& ctx, const std::string& path);
+    void rebuildLightViews();
 };
 
 } // namespace kazu

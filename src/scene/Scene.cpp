@@ -52,6 +52,35 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     m_directionalLight.color = glm::vec3(lcolor[0], lcolor[1], lcolor[2]);
     m_directionalLight.intensity = light.value("intensity", 1.0f);
 
+    m_pointLights.clear();
+    auto parsePointLight = [&](const json& node) {
+        PointLight point{};
+        auto pos = node.value("position", std::vector<float>{2.0f, 3.0f, 2.0f});
+        auto color = node.value("color", std::vector<float>{1.0f, 1.0f, 1.0f});
+        point.position = glm::vec3(pos[0], pos[1], pos[2]);
+        point.color = glm::vec3(color[0], color[1], color[2]);
+        point.intensity = node.value("intensity", 1.0f);
+        point.range = node.value("range", 10.0f);
+        m_pointLights.push_back(point);
+    };
+
+    if (light.value("type", std::string{}) == "point") {
+        parsePointLight(light);
+    }
+    if (j.contains("pointLights") && j["pointLights"].is_array()) {
+        for (const auto& point : j["pointLights"]) {
+            parsePointLight(point);
+        }
+    }
+    if (j.contains("lights") && j["lights"].is_array()) {
+        for (const auto& item : j["lights"]) {
+            if (item.value("type", std::string{}) == "point") {
+                parsePointLight(item);
+            }
+        }
+    }
+    rebuildLightViews();
+
     // Parse window
     auto window = j.value("window", json::object());
     m_config.windowWidth = window.value("width", 1280);
@@ -63,6 +92,7 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
                  m_directionalLight.direction.x, m_directionalLight.direction.y, m_directionalLight.direction.z,
                  m_directionalLight.color.x, m_directionalLight.color.y, m_directionalLight.color.z,
                  m_directionalLight.intensity);
+    spdlog::info("[Scene] Point Lights: {}", m_pointLights.size());
     spdlog::info("[Scene] Loading models...");
 
     // Parse models
@@ -318,6 +348,14 @@ Texture* Scene::getOrLoadTexture(Context& ctx, const std::string& path) {
     m_textures.push_back(std::move(texture));
     m_textureMap[path] = ptr;
     return ptr;
+}
+
+void Scene::rebuildLightViews() {
+    m_lights.clear();
+    m_lights.push_back(&m_directionalLight);
+    for (auto& point : m_pointLights) {
+        m_lights.push_back(&point);
+    }
 }
 
 } // namespace kazu

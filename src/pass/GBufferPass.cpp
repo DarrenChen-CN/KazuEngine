@@ -51,16 +51,17 @@ void GBufferPass::declare(RHI* rhi, RenderGraph* rg) {
         b.writeColor(1, self->m_normalHandle);
         b.writeColor(2, self->m_materialHandle);
         b.writeDepth(self->m_depthHandle);
-        b.execute = [self](VkCommandBuffer cmd, uint32_t imageIndex) {
-            self->execute(cmd, imageIndex);
+        b.execute = [self](const PassExecuteContext& ctx) {
+            self->execute(ctx);
         };
     });
 }
 
-void GBufferPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
-    m_scene = scene;
-    m_camera = camera;
-    m_renderGraph = rg;
+void GBufferPass::create(const PassCreateContext& ctx) {
+    m_rhi = ctx.rhi;
+    m_scene = ctx.scene;
+    m_camera = ctx.camera;
+    m_renderGraph = ctx.renderGraph;
 
     // ---- ShaderEffect (replaces PipelineBuilder) ----
     {
@@ -85,8 +86,8 @@ void GBufferPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     }
 }
 
-void GBufferPass::execute(VkCommandBuffer cmd, uint32_t imageIndex) {
-    (void)imageIndex;
+void GBufferPass::execute(const PassExecuteContext& ctx) {
+    VkCommandBuffer cmd = ctx.cmd;
 
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;

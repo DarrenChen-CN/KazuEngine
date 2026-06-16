@@ -602,6 +602,10 @@ void RenderGraph::createPassRenderTargets() {
 void RenderGraph::execute(VkCommandBuffer cmd, uint32_t imageIndex) const {
     if (!isCompiled()) return;
 
+    PassExecuteContext passCtx{};
+    passCtx.cmd = cmd;
+    passCtx.imageIndex = imageIndex;
+
     for (uint32_t idx : m_sortedIndices) {
         const auto& pass = m_passes[idx];
 
@@ -649,7 +653,7 @@ void RenderGraph::execute(VkCommandBuffer cmd, uint32_t imageIndex) const {
         }
 
         if (pass.execute) {
-            pass.execute(cmd, imageIndex);
+            pass.execute(passCtx);
         }
     }
 }

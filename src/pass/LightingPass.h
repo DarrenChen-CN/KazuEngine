@@ -22,11 +22,11 @@ public:
     // Pass interface
     const char* name() const override { return "Lighting"; }
     void declare(RHI* rhi, RenderGraph* rg) override;
-    void create(Scene* scene, Camera* camera, RenderGraph* rg) override;
+    void create(const PassCreateContext& ctx) override;
 
     void setDisplayMode(int mode) { m_displayMode = mode; }
 
-    void execute(VkCommandBuffer cmd, uint32_t imageIndex) override;
+    void execute(const PassExecuteContext& ctx) override;
 
     // Set GBuffer input handles (called before declare)
     void setInputs(RenderGraph::ResourceHandle albedo,

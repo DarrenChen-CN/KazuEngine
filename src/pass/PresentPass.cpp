@@ -35,18 +35,17 @@ void PresentPass::declare(RHI* rhi, RenderGraph* rg) {
     m_passHandle = rg->addPass("Present", [&](RenderGraph::PassBuilder& b) {
         b.read(self->m_sceneColorHandle);
         b.writeColor(0, self->m_swapchainHandle);
-        b.execute = [self](VkCommandBuffer cmd, uint32_t imageIndex) {
-            self->execute(cmd, imageIndex);
+        b.execute = [self](const PassExecuteContext& ctx) {
+            self->execute(ctx);
         };
     });
 }
 
-void PresentPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
-    (void)scene;
-    (void)camera;
-    m_renderGraph = rg;
+void PresentPass::create(const PassCreateContext& ctx) {
+    m_rhi = ctx.rhi;
+    m_renderGraph = ctx.renderGraph;
 
-    VkImageView sceneColorView = rg->getImageView(m_sceneColorHandle);
+    VkImageView sceneColorView = m_renderGraph->getImageView(m_sceneColorHandle);
 
     {
         ShaderEffect::Key key;
@@ -119,11 +118,13 @@ void PresentPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     }
 }
 
-void PresentPass::execute(VkCommandBuffer cmd, uint32_t imageIndex) {
+void PresentPass::execute(const PassExecuteContext& ctx) {
+    VkCommandBuffer cmd = ctx.cmd;
+
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass = m_renderGraph->getRenderPass(m_passHandle);
-    rpInfo.framebuffer = m_renderGraph->getFramebuffer(m_passHandle, imageIndex);
+    rpInfo.framebuffer = m_renderGraph->getFramebuffer(m_passHandle, ctx.imageIndex);
     rpInfo.renderArea.offset = {0, 0};
     rpInfo.renderArea.extent = m_rhi->extent();
     std::array<VkClearValue, 1> clears{};

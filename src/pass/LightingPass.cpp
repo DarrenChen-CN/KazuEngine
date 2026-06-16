@@ -64,19 +64,20 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
         b.read(self->m_normalHandle);
         b.read(self->m_depthHandle);
         b.writeColor(0, self->m_sceneColorHandle);
-        b.execute = [self](VkCommandBuffer cmd, uint32_t imageIndex) {
-            self->execute(cmd, imageIndex);
+        b.execute = [self](const PassExecuteContext& ctx) {
+            self->execute(ctx);
         };
     });
 }
 
-void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
-    m_scene = scene;
-    m_camera = camera;
-    m_renderGraph = rg;
+void LightingPass::create(const PassCreateContext& ctx) {
+    m_rhi = ctx.rhi;
+    m_scene = ctx.scene;
+    m_camera = ctx.camera;
+    m_renderGraph = ctx.renderGraph;
 
-    VkImageView albedoView = rg->getImageView(m_albedoHandle);
-    VkImageView normalView = rg->getImageView(m_normalHandle);
+    VkImageView albedoView = m_renderGraph->getImageView(m_albedoHandle);
+    VkImageView normalView = m_renderGraph->getImageView(m_normalHandle);
 
     // ---- ShaderEffect ----
     {
@@ -143,7 +144,7 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
         allocInfo.pSetLayouts = &m_descriptorSetLayout;
         VK_CHECK(vkAllocateDescriptorSets(m_rhi->ctx().device(), &allocInfo, &m_descriptorSet));
 
-        VkImageView depthView = rg->getImageView(m_depthHandle);
+        VkImageView depthView = m_renderGraph->getImageView(m_depthHandle);
 
         VkDescriptorImageInfo imageInfos[3]{};
         imageInfos[0].sampler = m_sampler;
@@ -170,11 +171,13 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     }
 }
 
-void LightingPass::execute(VkCommandBuffer cmd, uint32_t imageIndex) {
+void LightingPass::execute(const PassExecuteContext& ctx) {
+    VkCommandBuffer cmd = ctx.cmd;
+
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass = m_renderGraph->getRenderPass(m_passHandle);
-    rpInfo.framebuffer = m_renderGraph->getFramebuffer(m_passHandle, imageIndex);
+    rpInfo.framebuffer = m_renderGraph->getFramebuffer(m_passHandle, ctx.imageIndex);
     rpInfo.renderArea.offset = {0, 0};
     rpInfo.renderArea.extent = m_rhi->extent();
     std::array<VkClearValue, 1> clears{};
