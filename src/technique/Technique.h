@@ -17,6 +17,13 @@ class RHI;
 class Scene;
 class Camera;
 
+struct RenderFrameContext {
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    uint32_t imageIndex = 0;
+    VkImage swapchainImage = VK_NULL_HANDLE;
+    VkImageView swapchainImageView = VK_NULL_HANDLE;
+};
+
 class Technique {
 public:
     virtual ~Technique() = default;
@@ -29,9 +36,7 @@ public:
         onInit();
     }
 
-    virtual void setCurrentImageIndex(uint32_t imageIndex) = 0;
-    virtual void bindSwapchainImage(uint32_t imageIndex) = 0;
-    virtual void render(VkCommandBuffer cmd) = 0;
+    virtual void render(const RenderFrameContext& frame) = 0;
 
     virtual void exposePanel(PanelDesc& desc) = 0;
     virtual bool onKey(int key, int scancode, int action, int mods) {

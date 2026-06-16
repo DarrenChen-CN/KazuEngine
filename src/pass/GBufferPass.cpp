@@ -51,8 +51,8 @@ void GBufferPass::declare(RHI* rhi, RenderGraph* rg) {
         b.writeColor(1, self->m_normalHandle);
         b.writeColor(2, self->m_materialHandle);
         b.writeDepth(self->m_depthHandle);
-        b.execute = [self](VkCommandBuffer cmd) {
-            self->execute(cmd);
+        b.execute = [self](VkCommandBuffer cmd, uint32_t imageIndex) {
+            self->execute(cmd, imageIndex);
         };
     });
 }
@@ -85,7 +85,9 @@ void GBufferPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     }
 }
 
-void GBufferPass::execute(VkCommandBuffer cmd) {
+void GBufferPass::execute(VkCommandBuffer cmd, uint32_t imageIndex) {
+    (void)imageIndex;
+
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass = m_renderGraph->getRenderPass(m_passHandle);

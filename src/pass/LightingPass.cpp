@@ -64,8 +64,8 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
         b.read(self->m_normalHandle);
         b.read(self->m_depthHandle);
         b.writeColor(0, self->m_sceneColorHandle);
-        b.execute = [self](VkCommandBuffer cmd) {
-            self->execute(cmd);
+        b.execute = [self](VkCommandBuffer cmd, uint32_t imageIndex) {
+            self->execute(cmd, imageIndex);
         };
     });
 }
@@ -170,11 +170,11 @@ void LightingPass::create(Scene* scene, Camera* camera, RenderGraph* rg) {
     }
 }
 
-void LightingPass::execute(VkCommandBuffer cmd) {
+void LightingPass::execute(VkCommandBuffer cmd, uint32_t imageIndex) {
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass = m_renderGraph->getRenderPass(m_passHandle);
-    rpInfo.framebuffer = m_renderGraph->getFramebuffer(m_passHandle, m_currentImageIndex);
+    rpInfo.framebuffer = m_renderGraph->getFramebuffer(m_passHandle, imageIndex);
     rpInfo.renderArea.offset = {0, 0};
     rpInfo.renderArea.extent = m_rhi->extent();
     std::array<VkClearValue, 1> clears{};

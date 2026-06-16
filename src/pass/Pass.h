@@ -29,7 +29,7 @@ public:
     virtual void create(Scene* scene, Camera* camera, RenderGraph* rg) = 0;
 
     // Phase 3: record this pass into the current command buffer.
-    virtual void execute(VkCommandBuffer cmd) = 0;
+    virtual void execute(VkCommandBuffer cmd, uint32_t imageIndex) = 0;
 };
 
 } // namespace kazu

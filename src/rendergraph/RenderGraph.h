@@ -92,7 +92,7 @@ public:
             writeDepth_ = resource;
         }
 
-        std::function<void(VkCommandBuffer)> execute;
+        std::function<void(VkCommandBuffer, uint32_t)> execute;
         std::vector<ResourceHandle> reads;
         std::vector<std::pair<uint32_t, ResourceHandle>> writeColors;
         ResourceHandle writeDepth_ = InvalidResource;
@@ -111,7 +111,7 @@ public:
     // ------------------------------------------------------------------------
     // Execution: iterate passes in topological order, invoke user lambdas
     // ------------------------------------------------------------------------
-    void execute(VkCommandBuffer cmd) const;
+    void execute(VkCommandBuffer cmd, uint32_t imageIndex) const;
 
     // ------------------------------------------------------------------------
     // Queries
@@ -172,7 +172,7 @@ private:
     struct PassNode {
         std::string name;
         PassType type = PassType::Graphics;
-        std::function<void(VkCommandBuffer)> execute;
+        std::function<void(VkCommandBuffer, uint32_t)> execute;
         std::vector<ResourceUse> usages;
         BarrierBatch preBarrier;            // filled by deriveBarriers()
         std::vector<ResourceHandle> framebufferResources;

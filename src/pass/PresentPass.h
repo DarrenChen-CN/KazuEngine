@@ -23,11 +23,10 @@ public:
     void declare(RHI* rhi, RenderGraph* rg) override;
     void create(Scene* scene, Camera* camera, RenderGraph* rg) override;
 
-    void setCurrentImageIndex(uint32_t idx) { m_currentImageIndex = idx; }
     void setInput(RenderGraph::ResourceHandle sceneColor) { m_sceneColorHandle = sceneColor; }
     void setSwapchainHandle(RenderGraph::ResourceHandle swapchain) { m_swapchainHandle = swapchain; }
 
-    void execute(VkCommandBuffer cmd) override;
+    void execute(VkCommandBuffer cmd, uint32_t imageIndex) override;
 
 private:
     RHI* m_rhi = nullptr;
@@ -42,7 +41,6 @@ private:
     VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
-    uint32_t m_currentImageIndex = 0;
 };
 
 } // namespace kazu

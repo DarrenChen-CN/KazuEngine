@@ -32,11 +32,7 @@ public:
     void setDisplayMode(int mode);
     int  displayMode() const { return m_displayMode; }
 
-    void setCurrentImageIndex(uint32_t idx) override;
-
-    // Bind the current swapchain image to the imported resource before execute
-    void bindSwapchainImage(uint32_t imageIndex) override;
-    void render(VkCommandBuffer cmd) override;
+    void render(const RenderFrameContext& frame) override;
 
     // Expose GBuffer outputs for downstream passes / external techniques
     RenderGraph::ResourceHandle albedoHandle() const;
@@ -52,7 +48,6 @@ private:
     void onInit() override;
 
     int    m_displayMode = 0;
-    uint32_t m_currentImageIndex = 0;
 
     std::unique_ptr<GBufferPass>  m_gbufferPass;
     std::unique_ptr<LightingPass> m_lightingPass;

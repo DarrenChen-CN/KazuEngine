@@ -98,9 +98,12 @@ void Application::cleanup() {
 }
 
 void Application::recordFrame(uint32_t imageIndex) {
-    m_technique->setCurrentImageIndex(imageIndex);
-    m_technique->bindSwapchainImage(imageIndex);
-    m_technique->render(m_rhi->currentCmd());
+    RenderFrameContext frame{};
+    frame.cmd = m_rhi->currentCmd();
+    frame.imageIndex = imageIndex;
+    frame.swapchainImage = m_rhi->swapchainImage(imageIndex);
+    frame.swapchainImageView = m_rhi->swapchainImageView(imageIndex);
+    m_technique->render(frame);
 
     m_appUI->beginFrame();
     PanelDesc desc;

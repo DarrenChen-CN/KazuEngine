@@ -24,11 +24,9 @@ public:
     void declare(RHI* rhi, RenderGraph* rg) override;
     void create(Scene* scene, Camera* camera, RenderGraph* rg) override;
 
-    // State forwarded from Technique each frame
-    void setCurrentImageIndex(uint32_t idx) { m_currentImageIndex = idx; }
     void setDisplayMode(int mode) { m_displayMode = mode; }
 
-    void execute(VkCommandBuffer cmd) override;
+    void execute(VkCommandBuffer cmd, uint32_t imageIndex) override;
 
     // Set GBuffer input handles (called before declare)
     void setInputs(RenderGraph::ResourceHandle albedo,
@@ -55,7 +53,6 @@ private:
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkSampler        m_sampler        = VK_NULL_HANDLE;
 
-    uint32_t m_currentImageIndex = 0;
     int      m_displayMode = 0;
 };
 

@@ -79,19 +79,21 @@ void DeferredShading::onInit() {
     spdlog::info("DeferredShading initialized (pure composer)");
 }
 
-void DeferredShading::bindSwapchainImage(uint32_t imageIndex) {
-    if (m_renderGraph && m_swapchainHandle != RenderGraph::InvalidResource) {
+void DeferredShading::render(const RenderFrameContext& frame) {
+    if (!m_renderGraph) return;
+
+    if (m_swapchainHandle != RenderGraph::InvalidResource) {
         m_renderGraph->bindImportedTexture(
             m_swapchainHandle,
-            m_rhi->swapchainImage(imageIndex),
-            m_rhi->swapchainImageView(imageIndex));
+            frame.swapchainImage,
+            frame.swapchainImageView);
     }
-}
 
-void DeferredShading::render(VkCommandBuffer cmd) {
-    if (m_renderGraph) {
-        m_renderGraph->execute(cmd);
+    if (m_lightingPass) {
+        m_lightingPass->setDisplayMode(m_displayMode);
     }
+
+    m_renderGraph->execute(frame.cmd, frame.imageIndex);
 }
 
 void DeferredShading::exposePanel(PanelDesc& desc) {
@@ -110,17 +112,6 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
 void DeferredShading::setDisplayMode(int mode) {
     m_displayMode = mode;
     if (m_lightingPass) m_lightingPass->setDisplayMode(mode);
-}
-
-void DeferredShading::setCurrentImageIndex(uint32_t idx) {
-    m_currentImageIndex = idx;
-    if (m_lightingPass) {
-        m_lightingPass->setCurrentImageIndex(idx);
-        m_lightingPass->setDisplayMode(m_displayMode);
-    }
-    if (m_presentPass) {
-        m_presentPass->setCurrentImageIndex(idx);
-    }
 }
 
 bool DeferredShading::onKey(int key, int scancode, int action, int mods) {
