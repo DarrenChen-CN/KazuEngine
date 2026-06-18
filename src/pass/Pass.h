@@ -14,17 +14,19 @@ class RHI;
 class Scene;
 class Camera;
 class RenderGraph;
+struct Light;
 
 struct PassCreateContext {
     RHI* rhi = nullptr;
     RenderGraph* renderGraph = nullptr;
     Scene* scene = nullptr;
-    Camera* camera = nullptr;
 };
 
 struct PassExecuteContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     uint32_t imageIndex = 0;
+    const Camera* camera = nullptr;
+    const Light* light = nullptr;
 };
 
 class Pass {

@@ -599,12 +599,8 @@ void RenderGraph::createPassRenderTargets() {
 // Execution
 // ============================================================================
 
-void RenderGraph::execute(VkCommandBuffer cmd, uint32_t imageIndex) const {
+void RenderGraph::execute(const PassExecuteContext& passCtx) const {
     if (!isCompiled()) return;
-
-    PassExecuteContext passCtx{};
-    passCtx.cmd = cmd;
-    passCtx.imageIndex = imageIndex;
 
     for (uint32_t idx : m_sortedIndices) {
         const auto& pass = m_passes[idx];
@@ -641,7 +637,7 @@ void RenderGraph::execute(VkCommandBuffer cmd, uint32_t imageIndex) const {
             }
 
             if (!barriers.empty()) {
-                vkCmdPipelineBarrier(cmd,
+                vkCmdPipelineBarrier(passCtx.cmd,
                     pass.preBarrier.srcStage,
                     pass.preBarrier.dstStage,
                     0,

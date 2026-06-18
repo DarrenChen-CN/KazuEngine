@@ -21,9 +21,31 @@ void Camera::orbit(float deltaYaw, float deltaPitch) {
     glm::mat4 yaw = glm::rotate(glm::mat4(1.0f), deltaYaw, m_up);
     offset = glm::vec3(yaw * glm::vec4(offset, 1.0f));
 
-    // Pitch: rotate offset around right axis
-    glm::vec3 right = glm::normalize(glm::cross(offset, m_up));
-    glm::mat4 pitch = glm::rotate(glm::mat4(1.0f), deltaPitch, right);
+    // Clamp pitch before applying it, so we never cross the poles.
+    const float maxPitch = glm::radians(85.0f);
+    float currentPitch = glm::asin(glm::clamp(glm::dot(glm::normalize(offset), m_up), -1.0f, 1.0f));
+    float newPitch = glm::clamp(currentPitch + deltaPitch, -maxPitch, maxPitch);
+    float clampedDeltaPitch = newPitch - currentPitch;
+
+    // Pitch: rotate offset around right axis.
+    // If offset is nearly parallel to world-up, pick a fallback right axis
+    // to avoid a degenerate cross product (this is not gimbal lock, but a
+    // singularity in the orbit basis construction).
+    glm::vec3 right = glm::cross(offset, m_up);
+    float rightLen = glm::length(right);
+    if (rightLen < 0.0001f) {
+        right = glm::cross(glm::vec3(1.0f, 0.0f, 0.0f), m_up);
+        rightLen = glm::length(right);
+        if (rightLen < 0.0001f) {
+            right = glm::vec3(1.0f, 0.0f, 0.0f);
+        } else {
+            right /= rightLen;
+        }
+    } else {
+        right /= rightLen;
+    }
+
+    glm::mat4 pitch = glm::rotate(glm::mat4(1.0f), clampedDeltaPitch, right);
     offset = glm::vec3(pitch * glm::vec4(offset, 1.0f));
 
     m_position = m_target + offset;

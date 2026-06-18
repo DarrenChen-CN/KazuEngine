@@ -6,6 +6,7 @@
 #include "pass/GBufferPass.h"
 #include "pass/LightingPass.h"
 #include "pass/PresentPass.h"
+#include "pass/ShadowMapPass.h"
 #include "app/AppUI.h"
 #include "core/Utils.h"
 #include "rhi/RHI.h"
@@ -46,11 +47,15 @@ void DeferredShading::onInit() {
     m_gbufferPass = std::make_unique<GBufferPass>();
     m_gbufferPass->declare(m_rhi, m_renderGraph.get());
 
+    m_shadowMapPass = std::make_unique<ShadowMapPass>();
+    m_shadowMapPass->declare(m_rhi, m_renderGraph.get());
+
     m_lightingPass = std::make_unique<LightingPass>();
     m_lightingPass->setInputs(
         m_gbufferPass->albedoHandle(),
         m_gbufferPass->normalHandle(),
-        m_gbufferPass->depthHandle());
+        m_gbufferPass->depthHandle(),
+        m_shadowMapPass->shadowMapHandle());
     m_lightingPass->declare(m_rhi, m_renderGraph.get());
 
     m_presentPass = std::make_unique<PresentPass>();
@@ -68,7 +73,6 @@ void DeferredShading::onInit() {
     passCtx.rhi = m_rhi;
     passCtx.renderGraph = m_renderGraph.get();
     passCtx.scene = m_scene;
-    passCtx.camera = m_camera;
 
     m_gbufferPass->create(passCtx);
 
@@ -76,11 +80,12 @@ void DeferredShading::onInit() {
     m_scene->buildMaterials(m_rhi->ctx(), m_gbufferPass->shaderEffect(),
                             m_rhi->dslCache());
 
+    m_shadowMapPass->create(passCtx);
     m_lightingPass->create(passCtx);
     m_presentPass->create(passCtx);
 
-    // Restore display mode after resize re-init
-    m_lightingPass->setDisplayMode(m_displayMode);
+    // Restore lighting settings after resize re-init.
+    m_lightingPass->setSettings(m_lightingSettings);
 
     spdlog::info("DeferredShading initialized (pure composer)");
 }
@@ -96,28 +101,100 @@ void DeferredShading::render(const RenderFrameContext& frame) {
     }
 
     if (m_lightingPass) {
-        m_lightingPass->setDisplayMode(m_displayMode);
+        m_lightingPass->setSettings(m_lightingSettings);
     }
 
-    m_renderGraph->execute(frame.cmd, frame.imageIndex);
+    PassExecuteContext passCtx{};
+    passCtx.cmd = frame.cmd;
+    passCtx.imageIndex = frame.imageIndex;
+    passCtx.camera = m_camera;
+    passCtx.light = &m_scene->directionalLight();
+    m_renderGraph->execute(passCtx);
 }
 
 void DeferredShading::exposePanel(PanelDesc& desc) {
     desc.name = "Deferred Shading";
-    static const char* modes[] = {"Lighting", "Albedo", "Normal"};
+    static const char* modes[] = {"Lighting", "Albedo", "Normal", "Shadow Map"};
     PanelItem displayModeItem{};
     displayModeItem.type = PanelItem::Enum;
     displayModeItem.label = "Display Mode";
-    displayModeItem.e.value = &m_displayMode;
+    displayModeItem.e.value = &m_lightingSettings.debugView;
     displayModeItem.e.names = modes;
-    displayModeItem.e.count = 3;
+    displayModeItem.e.count = 4;
     desc.items.push_back(displayModeItem);
+
+    static const char* shadowModes[] = {"None", "Hard", "PCF", "PCSS"};
+    PanelItem shadowModeItem{};
+    shadowModeItem.type = PanelItem::Enum;
+    shadowModeItem.label = "Shadow Mode";
+    shadowModeItem.e.value = &m_lightingSettings.shadowMode;
+    shadowModeItem.e.names = shadowModes;
+    shadowModeItem.e.count = 4;
+    desc.items.push_back(shadowModeItem);
+
     desc.items.push_back({PanelItem::Separator, "", {}});
+
+    PanelItem shadowBiasItem{};
+    shadowBiasItem.type = PanelItem::Float;
+    shadowBiasItem.label = "Shadow Bias";
+    shadowBiasItem.f.value = &m_lightingSettings.shadowBias;
+    shadowBiasItem.f.min = 0.0f;
+    shadowBiasItem.f.max = 0.05f;
+    desc.items.push_back(shadowBiasItem);
+
+    PanelItem pcfCountItem{};
+    pcfCountItem.type = PanelItem::Int;
+    pcfCountItem.label = "PCF Samples";
+    pcfCountItem.i.value = &m_lightingSettings.pcfSampleCount;
+    pcfCountItem.i.min = 1;
+    pcfCountItem.i.max = 64;
+    desc.items.push_back(pcfCountItem);
+
+    PanelItem pcfSizeItem{};
+    pcfSizeItem.type = PanelItem::Float;
+    pcfSizeItem.label = "PCF Filter Size";
+    pcfSizeItem.f.value = &m_lightingSettings.pcfFilterSize;
+    pcfSizeItem.f.min = 0.0f;
+    pcfSizeItem.f.max = 0.05f;
+    desc.items.push_back(pcfSizeItem);
+
+    PanelItem lightWidthItem{};
+    lightWidthItem.type = PanelItem::Float;
+    lightWidthItem.label = "Light Width";
+    lightWidthItem.f.value = &m_lightingSettings.lightWidth;
+    lightWidthItem.f.min = 0.0f;
+    lightWidthItem.f.max = 0.2f;
+    desc.items.push_back(lightWidthItem);
 }
 
 void DeferredShading::setDisplayMode(int mode) {
-    m_displayMode = mode;
+    m_lightingSettings.debugView = mode;
     if (m_lightingPass) m_lightingPass->setDisplayMode(mode);
+}
+
+void DeferredShading::setShadowBias(float bias) {
+    m_lightingSettings.shadowBias = bias;
+    if (m_lightingPass) m_lightingPass->setShadowBias(bias);
+}
+
+void DeferredShading::setPcfSampleCount(int count) {
+    m_lightingSettings.pcfSampleCount = glm::clamp(count, 1, 64);
+    if (m_lightingPass) m_lightingPass->setPcfSampleCount(m_lightingSettings.pcfSampleCount);
+}
+
+void DeferredShading::setPcfFilterSize(float size) {
+    m_lightingSettings.pcfFilterSize = size;
+    if (m_lightingPass) m_lightingPass->setPcfFilterSize(m_lightingSettings.pcfFilterSize);
+}
+
+void DeferredShading::setLightWidth(float width) {
+    m_lightingSettings.lightWidth = width;
+    if (m_lightingPass) m_lightingPass->setLightWidth(m_lightingSettings.lightWidth);
+}
+
+void DeferredShading::setUsePCSS(bool use) {
+    m_lightingSettings.shadowMode = use ? ShadowMode_PCSS : ShadowMode_PCF;
+    if (m_lightingPass) m_lightingPass->setUsePCSS(use);
 }
 
 bool DeferredShading::onKey(int key, int scancode, int action, int mods) {
@@ -125,9 +202,9 @@ bool DeferredShading::onKey(int key, int scancode, int action, int mods) {
     (void)mods;
     if (key != GLFW_KEY_D || action != GLFW_PRESS) return false;
 
-    int mode = (displayMode() + 1) % 3;
+    int mode = (displayMode() + 1) % 4;
     setDisplayMode(mode);
-    const char* modeName = (mode == 0) ? "lighting" : (mode == 1) ? "albedo" : "normal";
+    const char* modeName = (mode == 0) ? "lighting" : (mode == 1) ? "albedo" : (mode == 2) ? "normal" : "shadow map";
     spdlog::info("Display mode: {}", modeName);
     return true;
 }

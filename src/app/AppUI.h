@@ -20,12 +20,14 @@ class RHI;
 // Zero ImGui dependency — can be defined in technique headers.
 // ---------------------------------------------------------------------------
 struct PanelItem {
-    enum Type { Enum, Bool, Separator };
+    enum Type { Enum, Bool, Float, Int, Separator };
     Type type;
     std::string label;
     union {
         struct { int* value; const char** names; int count; } e;
         struct { bool* value; } b;
+        struct { float* value; float min; float max; } f;
+        struct { int* value; int min; int max; } i;
     };
 };
 
@@ -48,6 +50,11 @@ public:
     void endFrame(VkCommandBuffer cmd, uint32_t imageIndex);
 
     void drawPanel(const PanelDesc& desc);
+
+    // Input capture queries: use these to avoid forwarding mouse events
+    // to the camera controller while interacting with ImGui widgets.
+    static bool wantsMouseInput();
+    static bool wantsKeyboardInput();
 
 private:
     void createRenderPass();

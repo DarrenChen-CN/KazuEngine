@@ -51,6 +51,11 @@ Mesh::Mesh(Context& ctx, const std::vector<Vertex>& vertices, const std::vector<
     : m_vertexCount(static_cast<uint32_t>(vertices.size()))
     , m_indexCount(static_cast<uint32_t>(indices.size()))
 {
+    // Compute local-space bounds from source vertices.
+    for (const auto& v : vertices) {
+        m_bounds.expand(v.position);
+    }
+
     VkDeviceSize vertexSize = sizeof(Vertex) * vertices.size();
     VkDeviceSize indexSize = sizeof(uint32_t) * indices.size();
 

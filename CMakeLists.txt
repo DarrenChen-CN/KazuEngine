@@ -151,6 +151,10 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/lighting.vert
     ${SHADER_SOURCE_DIR}/lighting.frag
     ${SHADER_SOURCE_DIR}/present.frag
+    ${SHADER_SOURCE_DIR}/shadowmap.vert
+    ${SHADER_SOURCE_DIR}/shadowmap.frag
+    ${SHADER_SOURCE_DIR}/lightvisualize.vert
+    ${SHADER_SOURCE_DIR}/lightvisualize.frag
 )
 
 foreach(SHADER ${SHADERS})

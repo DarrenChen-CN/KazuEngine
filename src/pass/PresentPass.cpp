@@ -28,8 +28,7 @@ PresentPass::~PresentPass() {
 }
 
 void PresentPass::declare(RHI* rhi, RenderGraph* rg) {
-    m_rhi = rhi;
-    m_renderGraph = rg;
+    (void)rhi;
 
     PresentPass* self = this;
     m_passHandle = rg->addPass("Present", [&](RenderGraph::PassBuilder& b) {

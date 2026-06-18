@@ -112,7 +112,7 @@ public:
     // ------------------------------------------------------------------------
     // Execution: iterate passes in topological order, invoke user lambdas
     // ------------------------------------------------------------------------
-    void execute(VkCommandBuffer cmd, uint32_t imageIndex) const;
+    void execute(const PassExecuteContext& ctx) const;
 
     // ------------------------------------------------------------------------
     // Queries

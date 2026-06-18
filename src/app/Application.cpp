@@ -122,6 +122,7 @@ void Application::onKey(int key, int scancode, int action, int mods) {
 
 void Application::onMouseButton(int button, int action, int mods) {
     (void)mods;
+    if (AppUI::wantsMouseInput()) return;
     if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
         m_dragButton = 0;
         glfwGetCursorPos(m_window, &m_lastMouseX, &m_lastMouseY);
@@ -136,7 +137,7 @@ void Application::onMouseButton(int button, int action, int mods) {
 }
 
 void Application::onCursorPos(double xpos, double ypos) {
-    if (m_dragButton == -1 || !m_camera) return;
+    if (m_dragButton == -1 || !m_camera || AppUI::wantsMouseInput()) return;
     double dx = xpos - m_lastMouseX;
     double dy = ypos - m_lastMouseY;
     m_lastMouseX = xpos;
@@ -153,6 +154,7 @@ void Application::onCursorPos(double xpos, double ypos) {
 
 void Application::onScroll(double xoffset, double yoffset) {
     (void)xoffset;
+    if (AppUI::wantsMouseInput()) return;
     if (m_camera) {
         m_camera->zoom(static_cast<float>(yoffset) * ZOOM_SENSITIVITY);
     }

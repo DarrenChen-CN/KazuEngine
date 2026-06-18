@@ -37,7 +37,6 @@ public:
 private:
     RHI*   m_rhi   = nullptr;
     Scene* m_scene = nullptr;
-    Camera* m_camera = nullptr;
 
     RenderGraph::ResourceHandle m_albedoHandle  = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_normalHandle  = RenderGraph::InvalidResource;

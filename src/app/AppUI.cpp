@@ -97,8 +97,16 @@ void AppUI::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     vkCmdEndRenderPass(cmd);
 }
 
+bool AppUI::wantsMouseInput() {
+    return ImGui::GetIO().WantCaptureMouse;
+}
+
+bool AppUI::wantsKeyboardInput() {
+    return ImGui::GetIO().WantCaptureKeyboard;
+}
+
 void AppUI::drawPanel(const PanelDesc& desc) {
-    ImGui::SetNextWindowSize(ImVec2(320, 140), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(420, 280), ImGuiCond_Always);
     ImGui::Begin(desc.name.c_str(), nullptr, ImGuiWindowFlags_NoResize);
     for (const auto& item : desc.items) {
         switch (item.type) {
@@ -110,11 +118,19 @@ void AppUI::drawPanel(const PanelDesc& desc) {
             case PanelItem::Bool:
                 ImGui::Checkbox(item.label.c_str(), item.b.value);
                 break;
+            case PanelItem::Float:
+                ImGui::SliderFloat(item.label.c_str(), item.f.value, item.f.min, item.f.max);
+                break;
+            case PanelItem::Int:
+                ImGui::SliderInt(item.label.c_str(), item.i.value, item.i.min, item.i.max);
+                break;
             case PanelItem::Separator:
                 ImGui::Separator();
                 break;
         }
     }
+    ImGui::Separator();
+    ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
     ImGui::End();
 }
 

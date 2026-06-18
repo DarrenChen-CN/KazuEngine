@@ -14,6 +14,39 @@ namespace kazu {
 
 class ShaderEffect;
 
+enum LightingModel : int {
+    LightingModel_Lambert = 0,
+    LightingModel_PBR = 1,
+};
+
+enum ShadowMode : int {
+    ShadowMode_None = 0,
+    ShadowMode_Hard = 1,
+    ShadowMode_PCF = 2,
+    ShadowMode_PCSS = 3,
+};
+
+enum LightingDebugView : int {
+    LightingDebugView_Lit = 0,
+    LightingDebugView_Albedo = 1,
+    LightingDebugView_Normal = 2,
+    LightingDebugView_ShadowMap = 3,
+};
+
+struct LightingSettings {
+    int lightingModel = LightingModel_Lambert;
+    int shadowMode = ShadowMode_Hard;
+    int debugView = LightingDebugView_Lit;
+
+    float shadowBias = 0.005f;
+    int   pcfSampleCount = 1;
+    float pcfFilterSize = 0.005f;
+    float lightWidth = 0.05f;
+
+    bool enableIBL = false;
+    bool enableSSAO = false;
+};
+
 class LightingPass : public Pass {
 public:
     LightingPass();
@@ -24,26 +57,35 @@ public:
     void declare(RHI* rhi, RenderGraph* rg) override;
     void create(const PassCreateContext& ctx) override;
 
-    void setDisplayMode(int mode) { m_displayMode = mode; }
+    void setSettings(const LightingSettings& settings) { m_settings = settings; }
+    const LightingSettings& settings() const { return m_settings; }
+
+    void setDisplayMode(int mode) { m_settings.debugView = mode; }
+    void setShadowBias(float bias) { m_settings.shadowBias = bias; }
+    void setPcfSampleCount(int count) { m_settings.pcfSampleCount = count; }
+    void setPcfFilterSize(float size) { m_settings.pcfFilterSize = size; }
+    void setLightWidth(float width) { m_settings.lightWidth = width; }
+    void setUsePCSS(bool use) { m_settings.shadowMode = use ? ShadowMode_PCSS : ShadowMode_PCF; }
 
     void execute(const PassExecuteContext& ctx) override;
 
     // Set GBuffer input handles (called before declare)
     void setInputs(RenderGraph::ResourceHandle albedo,
                    RenderGraph::ResourceHandle normal,
-                   RenderGraph::ResourceHandle depth);
+                   RenderGraph::ResourceHandle depth,
+                   RenderGraph::ResourceHandle shadowMap = RenderGraph::InvalidResource);
     RenderGraph::ResourceHandle sceneColorHandle() const { return m_sceneColorHandle; }
 
 private:
     RHI*   m_rhi   = nullptr;
     Scene* m_scene = nullptr;
-    Camera* m_camera = nullptr;
     RenderGraph* m_renderGraph = nullptr;
     RenderGraph::PassHandle m_passHandle = 0;
 
     RenderGraph::ResourceHandle m_albedoHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_normalHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_depthHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_shadowMapHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_sceneColorHandle = RenderGraph::InvalidResource;
 
     ShaderEffect*    m_effect         = nullptr;
@@ -53,7 +95,7 @@ private:
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkSampler        m_sampler        = VK_NULL_HANDLE;
 
-    int      m_displayMode = 0;
+    LightingSettings m_settings;
 };
 
 } // namespace kazu

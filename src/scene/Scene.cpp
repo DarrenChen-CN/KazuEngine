@@ -100,19 +100,50 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
         std::string path = model.value("path", "");
         std::string format = model.value("format", "obj");
         float scale = model.value("scale", 1.0f);
+        auto pos = model.value("position", std::vector<float>{0.0f, 0.0f, 0.0f});
+        glm::vec3 position(pos[0], pos.size() > 1 ? pos[1] : 0.0f, pos.size() > 2 ? pos[2] : 0.0f);
+        bool snapToGround = model.value("snapToGround", true);
 
         if (path.empty()) continue;
 
         if (format == "obj") {
-            loadObjModel(ctx, path, scale);
+            loadObjModel(ctx, path, scale, position, snapToGround);
         } else if (format == "gltf" || format == "glb") {
-            loadGltfModel(ctx, path, scale);
+            loadGltfModel(ctx, path, scale, position, snapToGround);
         } else {
             spdlog::warn("[Scene] Unknown model format: {}", format);
         }
     }
 
     spdlog::info("[Scene] Loaded {} model(s) from {}", m_instances.size(), scenePath);
+
+    // Add a ground plane for shadow visualization.
+    addGroundPlane(ctx);
+
+    // Compute world-space bounds from all model instances.
+    m_bounds = Bounds{};
+    for (const auto& inst : m_instances) {
+        if (!inst.mesh) continue;
+        const auto& localBounds = inst.mesh->bounds();
+        if (!localBounds.isValid()) continue;
+
+        // Transform all 8 corners of the local AABB and expand the world bounds.
+        for (int i = 0; i < 8; ++i) {
+            glm::vec3 localCorner(
+                (i & 1) ? localBounds.max.x : localBounds.min.x,
+                (i & 2) ? localBounds.max.y : localBounds.min.y,
+                (i & 4) ? localBounds.max.z : localBounds.min.z);
+            glm::vec3 worldCorner = glm::vec3(inst.transform * glm::vec4(localCorner, 1.0f));
+            m_bounds.expand(worldCorner);
+        }
+    }
+
+    if (m_bounds.isValid()) {
+        auto c = m_bounds.center();
+        auto e = m_bounds.extent();
+        spdlog::info("[Scene] World bounds center=({:.2f}, {:.2f}, {:.2f}) extent=({:.2f}, {:.2f}, {:.2f})",
+                     c.x, c.y, c.z, e.x, e.y, e.z);
+    }
 }
 
 void Scene::buildMaterials(Context& ctx, ShaderEffect* effect,
@@ -151,7 +182,8 @@ void Scene::draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
     }
 }
 
-void Scene::loadObjModel(Context& ctx, const std::string& path, float scale) {
+void Scene::loadObjModel(Context& ctx, const std::string& path, float scale,
+                         const glm::vec3& position, bool snapToGround) {
     // Try to load texture from model directory
     std::filesystem::path modelPath(path);
     std::filesystem::path dir = modelPath.parent_path();
@@ -169,7 +201,16 @@ void Scene::loadObjModel(Context& ctx, const std::string& path, float scale) {
 
     ModelInstance inst;
     inst.mesh = meshPtr;
-    inst.transform = glm::scale(glm::mat4(1.0f), glm::vec3(scale));
+
+    // Ground plane is at y = -0.1. Snap the model so its lowest point touches it.
+    glm::vec3 finalPosition = position;
+    if (snapToGround && meshPtr->bounds().isValid()) {
+        float minY = meshPtr->bounds().min.y;
+        finalPosition.y = -0.1f - minY * scale;
+    }
+
+    inst.transform = glm::translate(glm::mat4(1.0f), finalPosition)
+                   * glm::scale(glm::mat4(1.0f), glm::vec3(scale));
     inst.pendingAlbedoMap = texturePtr;
     inst.pendingBaseColorFactor = glm::vec4(1.0f);
     inst.pendingMetallic = 0.0f;
@@ -177,7 +218,8 @@ void Scene::loadObjModel(Context& ctx, const std::string& path, float scale) {
     m_instances.push_back(inst);
 }
 
-void Scene::loadGltfModel(Context& ctx, const std::string& path, float scale) {
+void Scene::loadGltfModel(Context& ctx, const std::string& path, float scale,
+                          const glm::vec3& position, bool snapToGround) {
     fastgltf::Parser parser;
 
     auto gltfFile = fastgltf::MappedGltfFile::FromPath(path);
@@ -356,6 +398,53 @@ void Scene::rebuildLightViews() {
     for (auto& point : m_pointLights) {
         m_lights.push_back(&point);
     }
+}
+
+void Scene::addGroundPlane(Context& ctx, float size, float y) {
+    const float half = size * 0.5f;
+    std::vector<Vertex> vertices = {
+        {{-half, y, -half}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+        {{ half, y, -half}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
+        {{ half, y,  half}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+        {{-half, y,  half}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f}},
+    };
+    std::vector<uint32_t> indices = {0, 1, 2, 0, 2, 3};
+
+    Mesh* meshPtr = getOrLoadMesh(ctx, "__scene_ground_plane__", vertices, indices);
+    Texture* texturePtr = getOrLoadTexture(ctx, "assets/textures/container.png");
+
+    ModelInstance inst;
+    inst.mesh = meshPtr;
+    inst.transform = glm::mat4(1.0f);
+    inst.pendingAlbedoMap = texturePtr;
+    inst.pendingBaseColorFactor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
+    inst.pendingMetallic = 0.0f;
+    inst.pendingRoughness = 0.9f;
+    m_instances.push_back(inst);
+
+    spdlog::info("[Scene] Added ground plane (size={:.1f}, y={:.2f})", size, y);
+}
+
+void Scene::addLightVisualizers(Context& ctx, float size) {
+    // Load a sphere primitive for light visualization
+    Mesh* meshPtr = getOrLoadMesh(ctx, "assets/models/Primitives/sphere.obj");
+    Texture* texturePtr = getOrLoadTexture(ctx, "assets/textures/container.png");
+
+    // Visualize point lights as bright yellow spheres
+    for (const auto& point : m_pointLights) {
+        ModelInstance inst;
+        inst.mesh = meshPtr;
+        inst.transform = glm::translate(glm::mat4(1.0f), point.position)
+                       * glm::scale(glm::mat4(1.0f), glm::vec3(size));
+        inst.pendingAlbedoMap = texturePtr;
+        inst.pendingBaseColorFactor = glm::vec4(1.0f, 0.9f, 0.2f, 1.0f); // bright yellow
+        inst.pendingMetallic = 0.0f;
+        inst.pendingRoughness = 0.1f;
+        inst.unlit = true;  // rendered by LightVisualizePass
+        m_instances.push_back(inst);
+    }
+
+    spdlog::info("[Scene] Added {} light visualizer(s)", m_pointLights.size());
 }
 
 } // namespace kazu

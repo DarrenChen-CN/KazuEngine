@@ -11,6 +11,7 @@
 #include "scene/Scene.h"
 #include "rendergraph/RenderGraph.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <array>
 
 namespace kazu {
@@ -19,10 +20,17 @@ namespace {
 
 struct LightingPush {
     glm::mat4 invViewProj;
+    glm::mat4 lightViewProj;
     glm::vec4 lightDirection;
     glm::vec4 lightColorIntensity;
     glm::vec4 viewPos;
-    int displayMode;
+    float     shadowBias;
+    float     pcfFilterSize;
+    float     lightWidth;
+    int       pcfSampleCount;
+    int       shadowMode;
+    int       debugView;
+    int       lightingModel;
 };
 
 } // anonymous namespace
@@ -44,18 +52,17 @@ LightingPass::~LightingPass() {
 
 void LightingPass::setInputs(RenderGraph::ResourceHandle albedo,
                                 RenderGraph::ResourceHandle normal,
-                                RenderGraph::ResourceHandle depth) {
+                                RenderGraph::ResourceHandle depth,
+                                RenderGraph::ResourceHandle shadowMap) {
     m_albedoHandle = albedo;
     m_normalHandle = normal;
     m_depthHandle = depth;
+    m_shadowMapHandle = shadowMap;
 }
 
 void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
-    m_rhi = rhi;
-    m_renderGraph = rg;
-
     m_sceneColorHandle = rg->addTexture("SceneColorHDR",
-        {m_rhi->extent().width, m_rhi->extent().height, VK_FORMAT_R16G16B16A16_SFLOAT,
+        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R16G16B16A16_SFLOAT,
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
 
     LightingPass* self = this;
@@ -63,6 +70,8 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
         b.read(self->m_albedoHandle);
         b.read(self->m_normalHandle);
         b.read(self->m_depthHandle);
+        if(self->m_shadowMapHandle != RenderGraph::InvalidResource)
+            b.read(self->m_shadowMapHandle);
         b.writeColor(0, self->m_sceneColorHandle);
         b.execute = [self](const PassExecuteContext& ctx) {
             self->execute(ctx);
@@ -73,7 +82,6 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
 void LightingPass::create(const PassCreateContext& ctx) {
     m_rhi = ctx.rhi;
     m_scene = ctx.scene;
-    m_camera = ctx.camera;
     m_renderGraph = ctx.renderGraph;
 
     VkImageView albedoView = m_renderGraph->getImageView(m_albedoHandle);
@@ -107,7 +115,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         VK_CHECK(vkCreateSampler(m_rhi->ctx().device(), &samplerInfo, nullptr, &m_sampler));
 
-        VkDescriptorSetLayoutBinding bindings[3]{};
+        VkDescriptorSetLayoutBinding bindings[4]{};
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = 1;
@@ -120,16 +128,20 @@ void LightingPass::create(const PassCreateContext& ctx) {
         bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[2].descriptorCount = 1;
         bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[3].binding = 3;
+        bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[3].descriptorCount = 1;
+        bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutCreateInfo dslInfo{};
         dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dslInfo.bindingCount = 3;
+        dslInfo.bindingCount = 4;
         dslInfo.pBindings = bindings;
         VK_CHECK(vkCreateDescriptorSetLayout(m_rhi->ctx().device(), &dslInfo, nullptr, &m_descriptorSetLayout));
 
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 3;
+        poolSize.descriptorCount = 4;
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets = 1;
@@ -145,8 +157,11 @@ void LightingPass::create(const PassCreateContext& ctx) {
         VK_CHECK(vkAllocateDescriptorSets(m_rhi->ctx().device(), &allocInfo, &m_descriptorSet));
 
         VkImageView depthView = m_renderGraph->getImageView(m_depthHandle);
+        VkImageView shadowMapView = (m_shadowMapHandle != RenderGraph::InvalidResource)
+            ? m_renderGraph->getImageView(m_shadowMapHandle)
+            : depthView;
 
-        VkDescriptorImageInfo imageInfos[3]{};
+        VkDescriptorImageInfo imageInfos[4]{};
         imageInfos[0].sampler = m_sampler;
         imageInfos[0].imageView = albedoView;
         imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -156,9 +171,12 @@ void LightingPass::create(const PassCreateContext& ctx) {
         imageInfos[2].sampler = m_sampler;
         imageInfos[2].imageView = depthView;
         imageInfos[2].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        imageInfos[3].sampler = m_sampler;
+        imageInfos[3].imageView = shadowMapView;
+        imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet writes[3]{};
-        for (int i = 0; i < 3; ++i) {
+        VkWriteDescriptorSet writes[4]{};
+        for (int i = 0; i < 4; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = m_descriptorSet;
             writes[i].dstBinding = i;
@@ -167,7 +185,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
             writes[i].descriptorCount = 1;
             writes[i].pImageInfo = &imageInfos[i];
         }
-        vkUpdateDescriptorSets(m_rhi->ctx().device(), 3, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_rhi->ctx().device(), 4, writes, 0, nullptr);
     }
 }
 
@@ -202,14 +220,39 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
 
     LightingPush push{};
     float aspect = static_cast<float>(m_rhi->extent().width) / m_rhi->extent().height;
-    glm::mat4 view = m_camera->getViewMatrix();
-    glm::mat4 proj = m_camera->getProjectionMatrix(aspect);
+    glm::mat4 view = ctx.camera->getViewMatrix();
+    glm::mat4 proj = ctx.camera->getProjectionMatrix(aspect);
     push.invViewProj = glm::inverse(proj * view);
-    const auto& light = m_scene->directionalLight();
-    push.lightDirection = glm::vec4(light.direction, 0.0f);
-    push.lightColorIntensity = glm::vec4(light.color, light.intensity);
-    push.viewPos = glm::vec4(m_camera->position(), 0.0f);
-    push.displayMode = m_displayMode;
+
+    // Use the same point-light-to-scene-center direction for both shadow and lighting.
+    glm::vec3 lightDir = m_scene->directionalLight().direction;
+    glm::vec3 lightPos = m_scene->directionalLight().direction * -3.0f;
+    if (!m_scene->pointLights().empty()) {
+        const auto& point = m_scene->pointLights()[0];
+        lightPos = point.position;
+        lightDir = glm::normalize(m_scene->bounds().center() - point.position);
+    }
+    push.lightDirection = glm::vec4(lightDir, 0.0f);
+    push.lightColorIntensity = glm::vec4(m_scene->directionalLight().color,
+                                         m_scene->directionalLight().intensity);
+
+    // Build light view/proj to match ShadowMapPass.
+    float sceneRadius = m_scene->bounds().isValid() ? m_scene->bounds().radius() : 10.0f;
+    float lightDist = glm::length(lightPos - m_scene->bounds().center());
+    float zNear = glm::max(0.01f, 0.1f * lightDist);
+    float zFar = glm::max(lightDist + sceneRadius, 2.0f * lightDist);
+    glm::mat4 lightView = glm::lookAt(lightPos, m_scene->bounds().center(), glm::vec3(0.0f, 1.0f, 0.0f));
+    glm::mat4 lightProj = glm::perspective(glm::radians(90.0f), 1.0f, zNear, zFar);
+    push.lightViewProj = lightProj * lightView;
+
+    push.viewPos = glm::vec4(ctx.camera->position(), 0.0f);
+    push.shadowBias = m_settings.shadowBias;
+    push.pcfFilterSize = m_settings.pcfFilterSize;
+    push.lightWidth = m_settings.lightWidth;
+    push.pcfSampleCount = m_settings.pcfSampleCount;
+    push.shadowMode = m_settings.shadowMode;
+    push.debugView = m_settings.debugView;
+    push.lightingModel = m_settings.lightingModel;
     vkCmdPushConstants(cmd, m_effect->pipelineLayout(),
         VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(LightingPush), &push);

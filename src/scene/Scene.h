@@ -8,6 +8,7 @@
 
 #include "../core/Context.h"
 #include "../rhi/Mesh.h"
+#include "../rhi/Bounds.h"
 #include "../rhi/Material.h"
 #include "../rhi/Texture.h"
 #include "Light.h"
@@ -41,6 +42,10 @@ struct ModelInstance {
     glm::vec4 pendingBaseColorFactor = glm::vec4(1.0f);
     float pendingMetallic = 0.0f;
     float pendingRoughness = 1.0f;
+
+    // If true, this instance is rendered by LightVisualizePass instead of
+    // going through the full GBuffer + Lighting pipeline.
+    bool unlit = false;
 };
 
 class Scene {
@@ -57,12 +62,18 @@ public:
     void draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
               const InstanceDrawFn& beforeDraw);
 
+    // Read-only access to scene instances for passes that need custom draw logic
+    // (e.g. ShadowMapPass only needs geometry, no material binding).
+    const std::vector<ModelInstance>& instances() const { return m_instances; }
+
     const SceneConfig& config() const { return m_config; }
     const DirectionalLight& directionalLight() const { return m_directionalLight; }
     const std::vector<PointLight>& pointLights() const { return m_pointLights; }
     const std::vector<Light*>& lights() const { return m_lights; }
+    const Bounds& bounds() const { return m_bounds; }
 
 private:
+    Bounds m_bounds;
     SceneConfig m_config;
     DirectionalLight m_directionalLight;
     std::vector<PointLight> m_pointLights;
@@ -81,8 +92,12 @@ private:
     // Instances (reference pools above; material filled in by buildMaterials)
     std::vector<ModelInstance> m_instances;
 
-    void loadObjModel(Context& ctx, const std::string& path, float scale);
-    void loadGltfModel(Context& ctx, const std::string& path, float scale);
+    void loadObjModel(Context& ctx, const std::string& path, float scale,
+                      const glm::vec3& position = glm::vec3(0.0f), bool snapToGround = true);
+    void loadGltfModel(Context& ctx, const std::string& path, float scale,
+                       const glm::vec3& position = glm::vec3(0.0f), bool snapToGround = true);
+    void addGroundPlane(Context& ctx, float size = 10.0f, float y = -0.1f);
+    void addLightVisualizers(Context& ctx, float size = 0.15f);
 
     // Resource loaders with path-based deduplication
     Mesh* getOrLoadMesh(Context& ctx, const std::string& path);

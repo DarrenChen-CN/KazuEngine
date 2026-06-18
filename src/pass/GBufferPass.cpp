@@ -29,20 +29,17 @@ GBufferPass::GBufferPass() = default;
 GBufferPass::~GBufferPass() = default;
 
 void GBufferPass::declare(RHI* rhi, RenderGraph* rg) {
-    m_rhi = rhi;
-    m_renderGraph = rg;
-
     m_albedoHandle = rg->addTexture("Albedo",
-        {m_rhi->extent().width, m_rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
+        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
     m_normalHandle = rg->addTexture("Normal",
-        {m_rhi->extent().width, m_rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
+        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
     m_materialHandle = rg->addTexture("Material",
-        {m_rhi->extent().width, m_rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
+        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
          VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
     m_depthHandle = rg->addTexture("Depth",
-        {m_rhi->extent().width, m_rhi->extent().height, VK_FORMAT_D32_SFLOAT,
+        {rhi->extent().width, rhi->extent().height, VK_FORMAT_D32_SFLOAT,
          VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
 
     GBufferPass* self = this;
@@ -60,7 +57,6 @@ void GBufferPass::declare(RHI* rhi, RenderGraph* rg) {
 void GBufferPass::create(const PassCreateContext& ctx) {
     m_rhi = ctx.rhi;
     m_scene = ctx.scene;
-    m_camera = ctx.camera;
     m_renderGraph = ctx.renderGraph;
 
     // ---- ShaderEffect (replaces PipelineBuilder) ----
@@ -115,16 +111,22 @@ void GBufferPass::execute(const PassExecuteContext& ctx) {
     scissor.extent = m_rhi->extent();
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    glm::mat4 viewProj = m_camera->getProjectionMatrix(m_rhi->aspect())
-                       * m_camera->getViewMatrix();
+    glm::mat4 viewProj = ctx.camera->getProjectionMatrix(m_rhi->aspect())
+                       * ctx.camera->getViewMatrix();
 
-    m_scene->draw(cmd, m_effect->pipelineLayout(),
-        [&](VkCommandBuffer drawCmd, VkPipelineLayout layout, const ModelInstance& inst) {
-            GBufferPush push{};
-            push.mvp = viewProj * inst.transform;
-            vkCmdPushConstants(drawCmd, layout, VK_SHADER_STAGE_VERTEX_BIT,
-                               0, sizeof(GBufferPush), &push);
-        });
+    for (const auto& inst : m_scene->instances()) {
+        if (!inst.mesh) continue;
+
+        GBufferPush push{};
+        push.mvp = viewProj * inst.transform;
+        vkCmdPushConstants(cmd, m_effect->pipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+                           0, sizeof(GBufferPush), &push);
+
+        if (inst.material) {
+            inst.material->bind(cmd, m_effect->pipelineLayout());
+        }
+        inst.mesh->draw(cmd);
+    }
     vkCmdEndRenderPass(cmd);
 }
 

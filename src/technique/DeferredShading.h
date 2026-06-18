@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include "pass/LightingPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "technique/Technique.h"
 
@@ -18,8 +19,8 @@ class Scene;
 class Camera;
 class RenderGraph;
 class GBufferPass;
-class LightingPass;
 class PresentPass;
+class ShadowMapPass;
 
 class DeferredShading : public Technique {
 public:
@@ -30,7 +31,17 @@ public:
     RenderGraph* renderGraph() const { return m_renderGraph.get(); }
 
     void setDisplayMode(int mode);
-    int  displayMode() const { return m_displayMode; }
+    int  displayMode() const { return m_lightingSettings.debugView; }
+    void setShadowBias(float bias);
+    float shadowBias() const { return m_lightingSettings.shadowBias; }
+    void setPcfSampleCount(int count);
+    int  pcfSampleCount() const { return m_lightingSettings.pcfSampleCount; }
+    void setPcfFilterSize(float size);
+    float pcfFilterSize() const { return m_lightingSettings.pcfFilterSize; }
+    void setLightWidth(float width);
+    float lightWidth() const { return m_lightingSettings.lightWidth; }
+    void setUsePCSS(bool use);
+    bool usePCSS() const { return m_lightingSettings.shadowMode == ShadowMode_PCSS; }
 
     void render(const RenderFrameContext& frame) override;
 
@@ -47,11 +58,12 @@ public:
 private:
     void onInit() override;
 
-    int    m_displayMode = 0;
+    LightingSettings m_lightingSettings;
 
     std::unique_ptr<GBufferPass>  m_gbufferPass;
     std::unique_ptr<LightingPass> m_lightingPass;
     std::unique_ptr<PresentPass>  m_presentPass;
+    std::unique_ptr<ShadowMapPass> m_shadowMapPass;
     std::unique_ptr<RenderGraph>  m_renderGraph;
 
     RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;

@@ -9,6 +9,7 @@
 
 #include "../core/Context.h"
 #include "../core/Buffer.h"
+#include "Bounds.h"
 #include <vulkan/vulkan.h>
 #include <glm/glm.hpp>
 #include <memory>
@@ -38,11 +39,15 @@ public:
     // Minimal OBJ loader: parses v/vt/vn/f, triangulates quads, deduplicates vertices.
     static Mesh loadObj(Context& ctx, const std::string& path);
 
+    // Local-space axis-aligned bounds computed from vertex positions.
+    const Bounds& bounds() const { return m_bounds; }
+
 private:
     std::unique_ptr<Buffer> m_vertexBuffer;
     std::unique_ptr<Buffer> m_indexBuffer;
     uint32_t m_vertexCount = 0;
     uint32_t m_indexCount = 0;
+    Bounds m_bounds;
 };
 
 } // namespace kazu
