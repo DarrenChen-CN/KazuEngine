@@ -7,6 +7,7 @@
 
 #pragma once
 #include <memory>
+#include <string>
 #include <GLFW/glfw3.h>
 
 namespace kazu {
@@ -22,7 +23,7 @@ public:
     Application();
     ~Application();
 
-    bool init();
+    bool init(const std::string& scenePath = "assets/scenes/sample-scene.json");
     void run();
 
 private:

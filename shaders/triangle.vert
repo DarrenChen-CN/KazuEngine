@@ -10,6 +10,8 @@ layout(location = 2) out vec2 fragTexCoord;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
+    vec4 baseColorFactor;
+    vec4 materialParams;
 } pc;
 
 void main() {

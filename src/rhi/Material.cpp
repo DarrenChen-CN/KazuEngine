@@ -33,20 +33,19 @@ void PBRMaterial::build(Context& ctx, DescriptorSetLayoutCache& dslCache) {
 
     m_textures = {albedoMap, normalMap, metallicRoughnessMap, aoMap};
 
-    // Count active texture bindings
     std::vector<VkDescriptorPoolSize> poolSizes;
-    std::vector<VkDescriptorImageInfo> imageInfos;
+    std::array<VkDescriptorImageInfo, 4> imageInfos{};
     std::vector<VkWriteDescriptorSet> writes;
 
     for (uint32_t i = 0; i < 4; ++i) {
         if (m_textures[i]) {
-            imageInfos.push_back(m_textures[i]->descriptorInfo());
+            imageInfos[i] = m_textures[i]->descriptorInfo();
             VkWriteDescriptorSet write{};
             write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             write.dstBinding = i;
             write.descriptorCount = 1;
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &imageInfos.back();
+            write.pImageInfo = &imageInfos[i];
             writes.push_back(write);
         }
     }

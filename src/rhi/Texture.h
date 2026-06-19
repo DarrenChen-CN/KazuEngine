@@ -19,7 +19,7 @@ namespace kazu {
 class Texture {
 public:
     // Load from file (PNG/JPG/etc). Uploads to GPU via temporary command buffer.
-    Texture(Context& ctx, const std::string& path);
+    Texture(Context& ctx, const std::string& path, bool srgb = true);
     ~Texture() = default;
 
     Texture(const Texture&) = delete;

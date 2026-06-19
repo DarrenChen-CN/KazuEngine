@@ -22,7 +22,7 @@ Application::~Application() {
     glfwTerminate();
 }
 
-bool Application::init() {
+bool Application::init(const std::string& scenePath) {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -46,8 +46,8 @@ bool Application::init() {
     m_rhi->init(m_window);
 
     m_scene = std::make_unique<Scene>();
-    m_scene->loadFromFile(
-        m_rhi->ctx(), "assets/scenes/sample-scene.json");
+    spdlog::info("Loading scene: {}", scenePath);
+    m_scene->loadFromFile(m_rhi->ctx(), scenePath);
 
     const auto& cfg = m_scene->config();
     if (cfg.windowWidth != m_windowWidth || cfg.windowHeight != m_windowHeight) {

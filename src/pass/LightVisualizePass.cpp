@@ -105,7 +105,7 @@ void LightVisualizePass::execute(const PassExecuteContext& ctx) {
         push.mvp = viewProj * inst.transform;
         push.color = inst.pendingBaseColorFactor;
         vkCmdPushConstants(cmd, m_effect->pipelineLayout(),
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT,
             0, sizeof(LightVisualizePush), &push);
         inst.mesh->draw(cmd);
     }

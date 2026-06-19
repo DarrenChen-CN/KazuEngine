@@ -12,7 +12,7 @@
 
 namespace kazu {
 
-Texture::Texture(Context& ctx, const std::string& path) : m_ctx(&ctx) {
+Texture::Texture(Context& ctx, const std::string& path, bool srgb) : m_ctx(&ctx) {
     int width, height, channels;
     stbi_uc* pixels = stbi_load(path.c_str(), &width, &height, &channels, STBI_rgb_alpha);
     if (!pixels) {
@@ -28,7 +28,7 @@ Texture::Texture(Context& ctx, const std::string& path) : m_ctx(&ctx) {
 
     m_image = std::make_unique<Image>(ctx,
         static_cast<uint32_t>(width), static_cast<uint32_t>(height),
-        VK_FORMAT_R8G8B8A8_SRGB,
+        srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
@@ -76,7 +76,7 @@ Texture::Texture(Context& ctx, const std::string& path) : m_ctx(&ctx) {
     samplerInfo.maxLod = 0.0f;
     m_sampler = std::make_unique<Sampler>(ctx, samplerInfo);
 
-    spdlog::info("[Texture] Loaded: {} ({}x{})", path, width, height);
+    spdlog::info("[Texture] Loaded: {} ({}x{}, {})", path, width, height, srgb ? "sRGB" : "linear");
 }
 
 VkDescriptorImageInfo Texture::descriptorInfo() const {

@@ -5,6 +5,7 @@
 #include "technique/DeferredShading.h"
 #include "pass/GBufferPass.h"
 #include "pass/LightingPass.h"
+#include "pass/LightVisualizePass.h"
 #include "pass/PresentPass.h"
 #include "pass/ShadowMapPass.h"
 #include "app/AppUI.h"
@@ -26,6 +27,11 @@ DeferredShading::~DeferredShading() {
 }
 
 void DeferredShading::onInit() {
+    if (!m_lightingSettingsInitialized) {
+        m_lightingSettings = m_scene->rendererSettings().lighting;
+        m_lightingSettingsInitialized = true;
+    }
+
     // ---- Phase 1: Declare ----
     m_renderGraph = std::make_unique<RenderGraph>(m_rhi->ctx());
 
@@ -55,8 +61,13 @@ void DeferredShading::onInit() {
         m_gbufferPass->albedoHandle(),
         m_gbufferPass->normalHandle(),
         m_gbufferPass->depthHandle(),
+        m_gbufferPass->materialHandle(),
         m_shadowMapPass->shadowMapHandle());
     m_lightingPass->declare(m_rhi, m_renderGraph.get());
+
+    m_lightVisualizePass = std::make_unique<LightVisualizePass>();
+    m_lightVisualizePass->setInput(m_lightingPass->sceneColorHandle());
+    m_lightVisualizePass->declare(m_rhi, m_renderGraph.get());
 
     m_presentPass = std::make_unique<PresentPass>();
     m_presentPass->setInput(m_lightingPass->sceneColorHandle());
@@ -82,6 +93,7 @@ void DeferredShading::onInit() {
 
     m_shadowMapPass->create(passCtx);
     m_lightingPass->create(passCtx);
+    m_lightVisualizePass->create(passCtx);
     m_presentPass->create(passCtx);
 
     // Restore lighting settings after resize re-init.
@@ -123,13 +135,22 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     displayModeItem.e.count = 4;
     desc.items.push_back(displayModeItem);
 
-    static const char* shadowModes[] = {"None", "Hard", "PCF", "PCSS"};
+    static const char* lightingModels[] = {"Lambert", "PBR"};
+    PanelItem lightingModelItem{};
+    lightingModelItem.type = PanelItem::Enum;
+    lightingModelItem.label = "Lighting Model";
+    lightingModelItem.e.value = &m_lightingSettings.lightingModel;
+    lightingModelItem.e.names = lightingModels;
+    lightingModelItem.e.count = 2;
+    desc.items.push_back(lightingModelItem);
+
+    static const char* shadowModes[] = {"None", "Hard", "PCF", "PCSS", "CSM"};
     PanelItem shadowModeItem{};
     shadowModeItem.type = PanelItem::Enum;
     shadowModeItem.label = "Shadow Mode";
     shadowModeItem.e.value = &m_lightingSettings.shadowMode;
     shadowModeItem.e.names = shadowModes;
-    shadowModeItem.e.count = 4;
+    shadowModeItem.e.count = 5;
     desc.items.push_back(shadowModeItem);
 
     desc.items.push_back({PanelItem::Separator, "", {}});

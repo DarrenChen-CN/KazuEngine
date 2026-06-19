@@ -9,43 +9,11 @@
 #include <vulkan/vulkan.h>
 #include "pass/Pass.h"
 #include "rendergraph/RenderGraph.h"
+#include "scene/RendererSettings.h"
 
 namespace kazu {
 
 class ShaderEffect;
-
-enum LightingModel : int {
-    LightingModel_Lambert = 0,
-    LightingModel_PBR = 1,
-};
-
-enum ShadowMode : int {
-    ShadowMode_None = 0,
-    ShadowMode_Hard = 1,
-    ShadowMode_PCF = 2,
-    ShadowMode_PCSS = 3,
-};
-
-enum LightingDebugView : int {
-    LightingDebugView_Lit = 0,
-    LightingDebugView_Albedo = 1,
-    LightingDebugView_Normal = 2,
-    LightingDebugView_ShadowMap = 3,
-};
-
-struct LightingSettings {
-    int lightingModel = LightingModel_Lambert;
-    int shadowMode = ShadowMode_Hard;
-    int debugView = LightingDebugView_Lit;
-
-    float shadowBias = 0.005f;
-    int   pcfSampleCount = 1;
-    float pcfFilterSize = 0.005f;
-    float lightWidth = 0.05f;
-
-    bool enableIBL = false;
-    bool enableSSAO = false;
-};
 
 class LightingPass : public Pass {
 public:
@@ -73,6 +41,7 @@ public:
     void setInputs(RenderGraph::ResourceHandle albedo,
                    RenderGraph::ResourceHandle normal,
                    RenderGraph::ResourceHandle depth,
+                   RenderGraph::ResourceHandle material,
                    RenderGraph::ResourceHandle shadowMap = RenderGraph::InvalidResource);
     RenderGraph::ResourceHandle sceneColorHandle() const { return m_sceneColorHandle; }
 
@@ -85,6 +54,7 @@ private:
     RenderGraph::ResourceHandle m_albedoHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_normalHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_depthHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_materialHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_shadowMapHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_sceneColorHandle = RenderGraph::InvalidResource;
 

@@ -6,6 +6,7 @@
 #include "rhi/Mesh.h"
 #include "scene/Light.h"
 #include "scene/Scene.h"
+#include "scene/ShadowCamera.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include "rhi/Camera.h"
 
@@ -85,33 +86,22 @@ void ShadowMapPass::execute(const PassExecuteContext& ctx) {
     scissor.extent = {shadowMapSize, shadowMapSize};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    const PointLight* pointLight = nullptr;
-    if (!m_scene->pointLights().empty()) {
-        pointLight = &m_scene->pointLights()[0];
-    }
-    if (!pointLight) {
-        spdlog::warn("ShadowMapPass: No point light found, skipping shadow map rendering.");
+    ShadowCamera shadowCamera = selectShadowCamera(
+        m_scene->directionalLight(),
+        m_scene->pointLights(),
+        m_scene->bounds());
+    if (!shadowCamera.valid) {
+        spdlog::warn("ShadowMapPass: No shadow-casting light found, skipping shadow map rendering.");
+        vkCmdEndRenderPass(cmd);
         return;
     }
 
-    glm::vec3 lightPos = pointLight->position;
-    glm::vec3 lightTarget = m_scene->bounds().center();
-    glm::mat4 view = glm::lookAt(lightPos, lightTarget, glm::vec3(0.0f, 1.0f, 0.0f));
-    // Point light looking at scene center, perspective projection.
-    float fov = glm::radians(90.0f);
-    float aspect = 1.0f;
-    float lightDist = glm::length(lightPos - lightTarget);
-    float sceneRadius = m_scene->bounds().isValid() ? m_scene->bounds().radius() : 10.0f;
-    float zNear = glm::max(0.01f, 0.1f * lightDist);
-    float zFar = glm::max(lightDist + sceneRadius, 2.0f * lightDist);
-    glm::mat4 proj = glm::perspective(fov, aspect, zNear, zFar);
-
     // ShadowMapPass only needs geometry; it does not sample material textures.
     for (const auto& inst : m_scene->instances()) {
-        if (!inst.mesh) continue;
+        if (!inst.mesh || inst.unlit) continue;
 
         ShadowMapPush push{};
-        push.mvp = proj * view * inst.transform;
+        push.mvp = shadowCamera.viewProj * inst.transform;
         vkCmdPushConstants(cmd, m_effect->pipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT,
                            0, sizeof(ShadowMapPush), &push);
         inst.mesh->draw(cmd);

@@ -153,27 +153,43 @@ Mesh Mesh::loadObj(Context& ctx, const std::string& path) {
             // Parse face: "f v1/vt1/vn1 v2/vt2/vn2 v3/vt3/vn3 ..."
             std::vector<IndexTriple> faceIndices;
             std::string token;
+            auto resolveIndex = [](const std::string& value, size_t count) -> uint32_t {
+                if (value.empty()) {
+                    return 0;
+                }
+
+                int idx = std::stoi(value);
+                if (idx > 0) {
+                    return static_cast<uint32_t>(idx);
+                }
+                if (idx < 0) {
+                    int resolved = static_cast<int>(count) + idx + 1;
+                    return resolved > 0 ? static_cast<uint32_t>(resolved) : 0;
+                }
+                return 0;
+            };
+
             while (iss >> token) {
                 IndexTriple tri{0, 0, 0};
                 size_t firstSlash = token.find('/');
                 if (firstSlash == std::string::npos) {
                     // v only
-                    tri.v = static_cast<uint32_t>(std::stoul(token));
+                    tri.v = resolveIndex(token, positions.size());
                 } else {
-                    tri.v = static_cast<uint32_t>(std::stoul(token.substr(0, firstSlash)));
+                    tri.v = resolveIndex(token.substr(0, firstSlash), positions.size());
                     size_t secondSlash = token.find('/', firstSlash + 1);
                     if (secondSlash == std::string::npos) {
                         // v/vt
                         if (firstSlash + 1 < token.size()) {
-                            tri.vt = static_cast<uint32_t>(std::stoul(token.substr(firstSlash + 1)));
+                            tri.vt = resolveIndex(token.substr(firstSlash + 1), texCoords.size());
                         }
                     } else {
                         // v/vt/vn
                         if (firstSlash + 1 < secondSlash) {
-                            tri.vt = static_cast<uint32_t>(std::stoul(token.substr(firstSlash + 1, secondSlash - firstSlash - 1)));
+                            tri.vt = resolveIndex(token.substr(firstSlash + 1, secondSlash - firstSlash - 1), texCoords.size());
                         }
                         if (secondSlash + 1 < token.size()) {
-                            tri.vn = static_cast<uint32_t>(std::stoul(token.substr(secondSlash + 1)));
+                            tri.vn = resolveIndex(token.substr(secondSlash + 1), normals.size());
                         }
                     }
                 }

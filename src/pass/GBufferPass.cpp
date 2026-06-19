@@ -20,6 +20,8 @@ namespace {
 
 struct GBufferPush {
     glm::mat4 mvp;
+    glm::vec4 baseColorFactor;
+    glm::vec4 materialParams;
 };
 
 } // anonymous namespace
@@ -115,11 +117,22 @@ void GBufferPass::execute(const PassExecuteContext& ctx) {
                        * ctx.camera->getViewMatrix();
 
     for (const auto& inst : m_scene->instances()) {
-        if (!inst.mesh) continue;
+        if (!inst.mesh || inst.unlit) continue;
 
         GBufferPush push{};
         push.mvp = viewProj * inst.transform;
-        vkCmdPushConstants(cmd, m_effect->pipelineLayout(), VK_SHADER_STAGE_VERTEX_BIT,
+        push.baseColorFactor = inst.pendingBaseColorFactor;
+        int textureFlags = 0;
+        if (inst.pendingNormalMap) textureFlags |= 1;
+        if (inst.pendingMetallicRoughnessMap) textureFlags |= 2;
+        if (inst.pendingAoMap) textureFlags |= 4;
+        if (inst.pendingFlipV) textureFlags |= 8;
+        push.materialParams = glm::vec4(inst.pendingMetallic,
+                                        inst.pendingRoughness,
+                                        inst.pendingAo,
+                                        static_cast<float>(textureFlags));
+        vkCmdPushConstants(cmd, m_effect->pipelineLayout(),
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(GBufferPush), &push);
 
         if (inst.material) {

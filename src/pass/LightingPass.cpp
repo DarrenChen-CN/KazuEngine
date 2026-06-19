@@ -9,6 +9,7 @@
 #include "rhi/ShaderEffect.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
+#include "scene/ShadowCamera.h"
 #include "rendergraph/RenderGraph.h"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -53,10 +54,12 @@ LightingPass::~LightingPass() {
 void LightingPass::setInputs(RenderGraph::ResourceHandle albedo,
                                 RenderGraph::ResourceHandle normal,
                                 RenderGraph::ResourceHandle depth,
+                                RenderGraph::ResourceHandle material,
                                 RenderGraph::ResourceHandle shadowMap) {
     m_albedoHandle = albedo;
     m_normalHandle = normal;
     m_depthHandle = depth;
+    m_materialHandle = material;
     m_shadowMapHandle = shadowMap;
 }
 
@@ -70,6 +73,7 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
         b.read(self->m_albedoHandle);
         b.read(self->m_normalHandle);
         b.read(self->m_depthHandle);
+        b.read(self->m_materialHandle);
         if(self->m_shadowMapHandle != RenderGraph::InvalidResource)
             b.read(self->m_shadowMapHandle);
         b.writeColor(0, self->m_sceneColorHandle);
@@ -86,6 +90,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
 
     VkImageView albedoView = m_renderGraph->getImageView(m_albedoHandle);
     VkImageView normalView = m_renderGraph->getImageView(m_normalHandle);
+    VkImageView materialView = m_renderGraph->getImageView(m_materialHandle);
 
     // ---- ShaderEffect ----
     {
@@ -115,7 +120,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         VK_CHECK(vkCreateSampler(m_rhi->ctx().device(), &samplerInfo, nullptr, &m_sampler));
 
-        VkDescriptorSetLayoutBinding bindings[4]{};
+        VkDescriptorSetLayoutBinding bindings[5]{};
         bindings[0].binding = 0;
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[0].descriptorCount = 1;
@@ -132,16 +137,20 @@ void LightingPass::create(const PassCreateContext& ctx) {
         bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[3].descriptorCount = 1;
         bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[4].binding = 4;
+        bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[4].descriptorCount = 1;
+        bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutCreateInfo dslInfo{};
         dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dslInfo.bindingCount = 4;
+        dslInfo.bindingCount = 5;
         dslInfo.pBindings = bindings;
         VK_CHECK(vkCreateDescriptorSetLayout(m_rhi->ctx().device(), &dslInfo, nullptr, &m_descriptorSetLayout));
 
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 4;
+        poolSize.descriptorCount = 5;
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets = 1;
@@ -161,7 +170,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
             ? m_renderGraph->getImageView(m_shadowMapHandle)
             : depthView;
 
-        VkDescriptorImageInfo imageInfos[4]{};
+        VkDescriptorImageInfo imageInfos[5]{};
         imageInfos[0].sampler = m_sampler;
         imageInfos[0].imageView = albedoView;
         imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -174,9 +183,12 @@ void LightingPass::create(const PassCreateContext& ctx) {
         imageInfos[3].sampler = m_sampler;
         imageInfos[3].imageView = shadowMapView;
         imageInfos[3].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        imageInfos[4].sampler = m_sampler;
+        imageInfos[4].imageView = materialView;
+        imageInfos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet writes[4]{};
-        for (int i = 0; i < 4; ++i) {
+        VkWriteDescriptorSet writes[5]{};
+        for (int i = 0; i < 5; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = m_descriptorSet;
             writes[i].dstBinding = i;
@@ -185,7 +197,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
             writes[i].descriptorCount = 1;
             writes[i].pImageInfo = &imageInfos[i];
         }
-        vkUpdateDescriptorSets(m_rhi->ctx().device(), 4, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_rhi->ctx().device(), 5, writes, 0, nullptr);
     }
 }
 
@@ -224,26 +236,17 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
     glm::mat4 proj = ctx.camera->getProjectionMatrix(aspect);
     push.invViewProj = glm::inverse(proj * view);
 
-    // Use the same point-light-to-scene-center direction for both shadow and lighting.
-    glm::vec3 lightDir = m_scene->directionalLight().direction;
-    glm::vec3 lightPos = m_scene->directionalLight().direction * -3.0f;
-    if (!m_scene->pointLights().empty()) {
-        const auto& point = m_scene->pointLights()[0];
-        lightPos = point.position;
-        lightDir = glm::normalize(m_scene->bounds().center() - point.position);
+    ShadowCamera shadowCamera = selectShadowCamera(
+        m_scene->directionalLight(),
+        m_scene->pointLights(),
+        m_scene->bounds());
+    if (!shadowCamera.valid) {
+        shadowCamera = buildDirectionalShadowCamera(m_scene->directionalLight(), m_scene->bounds());
+        shadowCamera.valid = true;
     }
-    push.lightDirection = glm::vec4(lightDir, 0.0f);
-    push.lightColorIntensity = glm::vec4(m_scene->directionalLight().color,
-                                         m_scene->directionalLight().intensity);
-
-    // Build light view/proj to match ShadowMapPass.
-    float sceneRadius = m_scene->bounds().isValid() ? m_scene->bounds().radius() : 10.0f;
-    float lightDist = glm::length(lightPos - m_scene->bounds().center());
-    float zNear = glm::max(0.01f, 0.1f * lightDist);
-    float zFar = glm::max(lightDist + sceneRadius, 2.0f * lightDist);
-    glm::mat4 lightView = glm::lookAt(lightPos, m_scene->bounds().center(), glm::vec3(0.0f, 1.0f, 0.0f));
-    glm::mat4 lightProj = glm::perspective(glm::radians(90.0f), 1.0f, zNear, zFar);
-    push.lightViewProj = lightProj * lightView;
+    push.lightDirection = glm::vec4(shadowCamera.lightDirection, 0.0f);
+    push.lightColorIntensity = glm::vec4(shadowCamera.color, shadowCamera.intensity);
+    push.lightViewProj = shadowCamera.viewProj;
 
     push.viewPos = glm::vec4(ctx.camera->position(), 0.0f);
     push.shadowBias = m_settings.shadowBias;

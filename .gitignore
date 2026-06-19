@@ -36,6 +36,9 @@ Thumbs.db
 imgui.ini
 kazuengine.log
 
+# Local assets
+assets/
+
 # Local docs
 docs/
 

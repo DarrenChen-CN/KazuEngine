@@ -427,9 +427,11 @@ bool RenderGraph::hasDependency(uint32_t writerIdx, uint32_t readerIdx) const {
         if (!isWriteUsage(write.usage)) continue;
         ResourceHandle w = write.resource;
         if (passReadsResource(reader, w)) return true;
-        // WAW (write-after-write): second writer depends on first
-        // This ensures deterministic ordering for shared outputs.
-        if (passWritesResource(reader, w)) return true;
+        // WAW (write-after-write): keep declaration order for passes that
+        // update the same attachment, e.g. Lighting -> LightVisualize on
+        // SceneColorHDR. Adding this dependency in both directions creates a
+        // false cycle, so only earlier writers constrain later writers.
+        if (writerIdx < readerIdx && passWritesResource(reader, w)) return true;
     }
     return false;
 }
@@ -500,7 +502,9 @@ void RenderGraph::createPassRenderTargets() {
             VkAttachmentDescription attachment{};
             attachment.format = res.desc.format;
             attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-            attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            attachment.loadOp = passReadsResource(pass, use.resource)
+                ? VK_ATTACHMENT_LOAD_OP_LOAD
+                : VK_ATTACHMENT_LOAD_OP_CLEAR;
             attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
             attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
             attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;

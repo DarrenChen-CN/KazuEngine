@@ -12,6 +12,7 @@
 #include "../rhi/Material.h"
 #include "../rhi/Texture.h"
 #include "Light.h"
+#include "RendererSettings.h"
 #include <glm/glm.hpp>
 #include <vector>
 #include <memory>
@@ -39,9 +40,14 @@ struct ModelInstance {
 
     // Material build parameters (used before buildMaterials() is called)
     Texture* pendingAlbedoMap = nullptr;
+    Texture* pendingNormalMap = nullptr;
+    Texture* pendingMetallicRoughnessMap = nullptr;
+    Texture* pendingAoMap = nullptr;
     glm::vec4 pendingBaseColorFactor = glm::vec4(1.0f);
     float pendingMetallic = 0.0f;
     float pendingRoughness = 1.0f;
+    float pendingAo = 1.0f;
+    bool pendingFlipV = true;
 
     // If true, this instance is rendered by LightVisualizePass instead of
     // going through the full GBuffer + Lighting pipeline.
@@ -70,11 +76,13 @@ public:
     const DirectionalLight& directionalLight() const { return m_directionalLight; }
     const std::vector<PointLight>& pointLights() const { return m_pointLights; }
     const std::vector<Light*>& lights() const { return m_lights; }
+    const RendererSettings& rendererSettings() const { return m_rendererSettings; }
     const Bounds& bounds() const { return m_bounds; }
 
 private:
     Bounds m_bounds;
     SceneConfig m_config;
+    RendererSettings m_rendererSettings;
     DirectionalLight m_directionalLight;
     std::vector<PointLight> m_pointLights;
     std::vector<Light*> m_lights;
@@ -93,7 +101,17 @@ private:
     std::vector<ModelInstance> m_instances;
 
     void loadObjModel(Context& ctx, const std::string& path, float scale,
-                      const glm::vec3& position = glm::vec3(0.0f), bool snapToGround = true);
+                      const glm::vec3& position = glm::vec3(0.0f),
+                      bool snapToGround = true,
+                      const std::string& texturePathOverride = {},
+                      const std::string& normalTexturePath = {},
+                      const std::string& metallicRoughnessTexturePath = {},
+                      const std::string& aoTexturePath = {},
+                      const glm::vec4& baseColorFactor = glm::vec4(1.0f),
+                      float metallic = 0.0f,
+                      float roughness = 1.0f,
+                      float ao = 1.0f,
+                      bool flipV = true);
     void loadGltfModel(Context& ctx, const std::string& path, float scale,
                        const glm::vec3& position = glm::vec3(0.0f), bool snapToGround = true);
     void addGroundPlane(Context& ctx, float size = 10.0f, float y = -0.1f);
@@ -104,7 +122,7 @@ private:
     Mesh* getOrLoadMesh(Context& ctx, const std::string& key,
                         const std::vector<Vertex>& vertices,
                         const std::vector<uint32_t>& indices);
-    Texture* getOrLoadTexture(Context& ctx, const std::string& path);
+    Texture* getOrLoadTexture(Context& ctx, const std::string& path, bool srgb = true);
     void rebuildLightViews();
 };
 
