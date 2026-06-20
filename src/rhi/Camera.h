@@ -19,6 +19,7 @@ public:
     void setTarget(const glm::vec3& target);
     void setUp(const glm::vec3& up);
     void setFov(float fovDeg);
+    void setJitter(const glm::vec2& jitter) { m_jitter = jitter; }
 
     // Orbit around target: deltaYaw/deltaPitch in radians
     void orbit(float deltaYaw, float deltaPitch);
@@ -33,6 +34,8 @@ public:
     glm::mat4 getViewMatrix() const;
     glm::mat4 getProjectionMatrix(float aspect) const;
 
+    glm::mat4 getJitteredProjectionMatrix(float aspect) const;
+
     const glm::vec3& position() const { return m_position; }
     const glm::vec3& target() const { return m_target; }
 
@@ -43,6 +46,7 @@ private:
     float m_fovDeg = 45.0f;
     float m_near = 0.1f;
     float m_far = 100.0f;
+    glm::vec2 m_jitter{0.0f};
 };
 
 } // namespace kazu

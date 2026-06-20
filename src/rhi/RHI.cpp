@@ -158,4 +158,8 @@ Context& RHI::ctx() {
     return *m_ctx;
 }
 
+VkCommandPool RHI::commandPool() const {
+    return m_commandPool->handle();
+}
+
 } // namespace kazu

@@ -54,6 +54,7 @@ public:
     DescriptorSetLayoutCache& dslCache();
     PipelineCache& pipelineCache();
     Context& ctx();
+    VkCommandPool commandPool() const;
 
     void setFramebufferResized(bool v) { m_framebufferResized = v; }
 

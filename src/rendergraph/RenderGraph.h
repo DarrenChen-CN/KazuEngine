@@ -53,7 +53,12 @@ public:
     // The RenderGraph will not allocate memory for it, but it participates
     // in barrier derivation and can be queried like a regular texture.
     ResourceHandle addImportedTexture(const char* name, const TextureDesc& desc,
-                                       VkImage image, VkImageView view);
+                                       VkImage image, VkImageView view,
+                                       VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED);
+
+    // Update the expected initial layout of an imported texture (e.g. for
+    // ping-pong history buffers that persist across frames).
+    void setImportedTextureLayout(ResourceHandle handle, VkImageLayout layout);
 
     // Re-bind the external image handles for an imported resource.
     // Called each frame when the Swapchain image index changes.
@@ -155,6 +160,7 @@ private:
         VkImage currentImage = VK_NULL_HANDLE;
         VkImageView currentView = VK_NULL_HANDLE;
         std::vector<VkImageView> allViews;
+        VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     };
 
     struct ResourceNode {

@@ -1,0 +1,76 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba8) uniform writeonly image2D outImage;
+layout(binding = 1) uniform sampler2D sceneColorSampler;
+
+layout(push_constant) uniform Push {
+    int enabled;
+} pc;
+
+#define FXAA_SPAN_MAX     8.0
+#define FXAA_REDUCE_MUL   (1.0 / 8.0)
+#define FXAA_REDUCE_MIN   (1.0 / 128.0)
+
+float luma(vec3 rgb) {
+    return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(outImage);
+    if (any(greaterThanEqual(texel, size))) return;
+
+    vec2 uv = (vec2(texel) + vec2(0.5)) / vec2(size);
+
+    if (pc.enabled == 0) {
+        imageStore(outImage, texel, texture(sceneColorSampler, uv));
+        return;
+    }
+
+    vec2 rcpFrame = 1.0 / vec2(size);
+
+    vec3 rgbM  = texture(sceneColorSampler, uv).rgb;
+    vec3 rgbNW = texture(sceneColorSampler, uv + vec2(-1.0, -1.0) * rcpFrame).rgb;
+    vec3 rgbNE = texture(sceneColorSampler, uv + vec2( 1.0, -1.0) * rcpFrame).rgb;
+    vec3 rgbSW = texture(sceneColorSampler, uv + vec2(-1.0,  1.0) * rcpFrame).rgb;
+    vec3 rgbSE = texture(sceneColorSampler, uv + vec2( 1.0,  1.0) * rcpFrame).rgb;
+
+    float lumaM  = luma(rgbM);
+    float lumaNW = luma(rgbNW);
+    float lumaNE = luma(rgbNE);
+    float lumaSW = luma(rgbSW);
+    float lumaSE = luma(rgbSE);
+
+    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
+    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+
+    vec2 dir;
+    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
+    dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+
+    float dirReduce = max(
+        (lumaNW + lumaNE + lumaSW + lumaSE) * 0.25 * FXAA_REDUCE_MUL,
+        FXAA_REDUCE_MIN);
+
+    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
+    dir = clamp(dir * rcpDirMin,
+                vec2(-FXAA_SPAN_MAX),
+                vec2( FXAA_SPAN_MAX)) * rcpFrame;
+
+    vec3 rgbA = 0.5 * (
+        texture(sceneColorSampler, uv + dir * (1.0 / 3.0 - 0.5)).rgb +
+        texture(sceneColorSampler, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+
+    vec3 rgbB = rgbA * 0.5 + 0.25 * (
+        texture(sceneColorSampler, uv + dir * -0.5).rgb +
+        texture(sceneColorSampler, uv + dir *  0.5).rgb);
+
+    float lumaB = luma(rgbB);
+
+    if ((lumaB < lumaMin) || (lumaB > lumaMax))
+        imageStore(outImage, texel, vec4(rgbA, 1.0));
+    else
+        imageStore(outImage, texel, vec4(rgbB, 1.0));
+}

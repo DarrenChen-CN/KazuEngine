@@ -121,7 +121,7 @@ void GBufferPass::execute(const PassExecuteContext& ctx) {
     scissor.extent = m_rhi->extent();
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    glm::mat4 viewProj = ctx.camera->getProjectionMatrix(m_rhi->aspect())
+    glm::mat4 viewProj = ctx.camera->getJitteredProjectionMatrix(m_rhi->aspect())
                        * ctx.camera->getViewMatrix();
 
     for (const auto& inst : m_scene->instances()) {

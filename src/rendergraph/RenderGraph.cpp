@@ -124,7 +124,8 @@ RenderGraph::ResourceHandle RenderGraph::addBuffer(const char* name) {
 }
 
 RenderGraph::ResourceHandle RenderGraph::addImportedTexture(const char* name, const TextureDesc& desc,
-                                                             VkImage image, VkImageView view) {
+                                                             VkImage image, VkImageView view,
+                                                             VkImageLayout initialLayout) {
     ResourceHandle handle = static_cast<ResourceHandle>(m_resources.size());
     ResourceNode node;
     node.name = name ? name : "";
@@ -132,8 +133,16 @@ RenderGraph::ResourceHandle RenderGraph::addImportedTexture(const char* name, co
     node.ownership = ResourceOwnership::Imported;
     node.imported.currentImage = image;
     node.imported.currentView = view;
+    node.imported.initialLayout = initialLayout;
     m_resources.push_back(std::move(node));
     return handle;
+}
+
+void RenderGraph::setImportedTextureLayout(ResourceHandle handle, VkImageLayout layout) {
+    if (handle >= m_resources.size()) return;
+    auto& res = m_resources[handle];
+    if (res.ownership != ResourceOwnership::Imported) return;
+    res.imported.initialLayout = layout;
 }
 
 void RenderGraph::bindImportedTexture(ResourceHandle handle, VkImage image, VkImageView view) {
@@ -366,7 +375,18 @@ static UsageInfo getUsageInfo(RenderGraph::ResourceUsage usage, RenderGraph::Pas
 void RenderGraph::deriveBarriers() {
     if (m_sortedIndices.empty()) return;
 
+    auto getInitialLayout = [&](ResourceHandle rh) -> VkImageLayout {
+        if (rh >= m_resources.size()) return VK_IMAGE_LAYOUT_UNDEFINED;
+        const auto& res = m_resources[rh];
+        if (res.ownership == ResourceOwnership::Imported)
+            return res.imported.initialLayout;
+        return VK_IMAGE_LAYOUT_UNDEFINED;
+    };
+
     std::vector<ResourceState> states(m_resources.size());
+    for (size_t i = 0; i < m_resources.size(); ++i) {
+        states[i].layout = getInitialLayout(static_cast<ResourceHandle>(i));
+    }
 
     for (uint32_t sortedIdx : m_sortedIndices) {
         auto& pass = m_passes[sortedIdx];

@@ -364,7 +364,7 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
     LightingPush push{};
     float aspect = static_cast<float>(m_rhi->extent().width) / m_rhi->extent().height;
     glm::mat4 view = ctx.camera->getViewMatrix();
-    glm::mat4 proj = ctx.camera->getProjectionMatrix(aspect);
+    glm::mat4 proj = ctx.camera->getJitteredProjectionMatrix(aspect);
     push.invViewProj = glm::inverse(proj * view);
 
     ShadowCamera shadowCamera = selectShadowCamera(

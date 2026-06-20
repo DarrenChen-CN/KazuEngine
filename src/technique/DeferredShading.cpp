@@ -10,8 +10,13 @@
 #include "pass/ShadowMapPass.h"
 #include "pass/SSAOPass.h"
 #include "pass/SSAOBlurPass.h"
+#include "pass/TonemapPass.h"
+#include "pass/FXAAPass.h"
+#include "pass/TAAPass.h"
 #include "app/AppUI.h"
 #include "core/Utils.h"
+#include "core/Image.h"
+#include "core/CommandBuffer.h"
 #include "rhi/RHI.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
@@ -20,6 +25,34 @@
 #include <vector>
 
 namespace kazu {
+
+namespace {
+
+float halton(int index, int base) {
+    float result = 0.0f;
+    float f = 1.0f / static_cast<float>(base);
+    int i = index;
+    while (i > 0) {
+        result += f * static_cast<float>(i % base);
+        f /= static_cast<float>(base);
+        i /= base;
+    }
+    return result;
+}
+
+glm::vec2 halton23(int index) {
+    // Offset by 1 to avoid the (0,0) sample.
+    return glm::vec2(halton(index + 1, 2), halton(index + 1, 3));
+}
+
+glm::vec2 computeTAAJitter(uint32_t frameIndex, const VkExtent2D& extent) {
+    glm::vec2 h = halton23(static_cast<int>(frameIndex % 8));
+    // Map from [0,1] to [-0.5,0.5] pixels, then to NDC.
+    return (h - 0.5f) * 2.0f / glm::vec2(static_cast<float>(extent.width),
+                                          static_cast<float>(extent.height));
+}
+
+} // anonymous namespace
 
 DeferredShading::DeferredShading() = default;
 
@@ -85,8 +118,84 @@ void DeferredShading::onInit() {
     m_lightVisualizePass->setInput(m_lightingPass->sceneColorHandle());
     m_lightVisualizePass->declare(m_rhi, m_renderGraph.get());
 
+    // TAA history buffers (persistent, ping-ponged across frames)
+    {
+        VkExtent2D extent = m_rhi->extent();
+        for (int i = 0; i < 2; ++i) {
+            m_taaHistoryImages[i] = std::make_unique<Image>(m_rhi->ctx(),
+                ImageDesc{
+                    VK_IMAGE_TYPE_2D,
+                    {extent.width, extent.height, 1},
+                    1, 1,
+                    VK_FORMAT_R16G16B16A16_SFLOAT,
+                    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+                });
+        }
+
+        // Clear to black and leave them in SHADER_READ_ONLY_OPTIMAL so the
+        // RenderGraph's initial-layout tracking matches the real image state.
+        CommandBuffer cmd(m_rhi->ctx(), m_rhi->commandPool());
+        cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+        VkClearColorValue clearValue{};
+        clearValue.float32[0] = 0.0f;
+        clearValue.float32[1] = 0.0f;
+        clearValue.float32[2] = 0.0f;
+        clearValue.float32[3] = 1.0f;
+        VkImageSubresourceRange range{};
+        range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        range.baseMipLevel = 0;
+        range.levelCount = 1;
+        range.baseArrayLayer = 0;
+        range.layerCount = 1;
+        for (int i = 0; i < 2; ++i) {
+            m_taaHistoryImages[i]->transitionLayout(cmd.handle(),
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            vkCmdClearColorImage(cmd.handle(), m_taaHistoryImages[i]->handle(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearValue, 1, &range);
+            m_taaHistoryImages[i]->transitionLayout(cmd.handle(),
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+        cmd.end();
+        cmd.submit(m_rhi->ctx().graphicsQueue());
+        vkDeviceWaitIdle(m_rhi->ctx().device());
+
+        m_taaHistoryReadIndex = 0;
+        m_taaFrameIndex = 0;
+        m_taaHistoryHandles[0] = m_renderGraph->addImportedTexture("TAAHistory0",
+            {.width = extent.width,
+             .height = extent.height,
+             .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+             .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+            m_taaHistoryImages[0]->handle(), m_taaHistoryImages[0]->view(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        m_taaHistoryHandles[1] = m_renderGraph->addImportedTexture("TAAHistory1",
+            {.width = extent.width,
+             .height = extent.height,
+             .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+             .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT},
+            m_taaHistoryImages[1]->handle(), m_taaHistoryImages[1]->view(),
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    m_taaPass = std::make_unique<TAAPass>();
+    m_taaPass->setInputHDR(m_lightingPass->sceneColorHandle());
+    m_taaPass->setInputDepth(m_gbufferPass->depthHandle());
+    m_taaPass->setHistoryRead(m_taaHistoryHandles[0]);
+    m_taaPass->setHistoryWrite(m_taaHistoryHandles[1]);
+    m_taaPass->declare(m_rhi, m_renderGraph.get());
+
+    m_tonemapPass = std::make_unique<TonemapPass>();
+    m_tonemapPass->setInput(m_taaPass->outputHandle());
+    m_tonemapPass->declare(m_rhi, m_renderGraph.get());
+
+    m_fxaaPass = std::make_unique<FXAAPass>();
+    m_fxaaPass->setInput(m_tonemapPass->outputHandle());
+    m_fxaaPass->declare(m_rhi, m_renderGraph.get());
+
     m_presentPass = std::make_unique<PresentPass>();
-    m_presentPass->setInput(m_lightingPass->sceneColorHandle());
+    m_presentPass->setInput(m_fxaaPass->outputHandle());
     m_presentPass->setSwapchainHandle(m_swapchainHandle);
     m_presentPass->declare(m_rhi, m_renderGraph.get());
 
@@ -112,6 +221,9 @@ void DeferredShading::onInit() {
     m_ssaoBlurPass->create(passCtx);
     m_lightingPass->create(passCtx);
     m_lightVisualizePass->create(passCtx);
+    m_taaPass->create(passCtx);
+    m_tonemapPass->create(passCtx);
+    m_fxaaPass->create(passCtx);
     m_presentPass->create(passCtx);
 
     // Restore lighting settings after resize re-init.
@@ -134,12 +246,72 @@ void DeferredShading::render(const RenderFrameContext& frame) {
         m_lightingPass->setSettings(m_lightingSettings);
     }
 
+    if (m_tonemapPass) {
+        m_tonemapPass->setExposure(m_lightingSettings.exposure);
+        m_tonemapPass->setGamma(m_lightingSettings.gamma);
+        m_tonemapPass->setMode(m_lightingSettings.toneMappingMode);
+    }
+
+    if (m_fxaaPass) {
+        m_fxaaPass->setEnabled(m_lightingSettings.enableFXAA);
+    }
+
+    // ---- TAA jitter / matrix setup ----
+    bool taaEnabled = m_lightingSettings.enableTAA;
+    glm::vec2 jitter(0.0f);
+    if (taaEnabled) {
+        jitter = computeTAAJitter(m_taaFrameIndex, m_rhi->extent());
+    }
+    m_camera->setJitter(jitter);
+
+    float aspect = static_cast<float>(m_rhi->extent().width) / m_rhi->extent().height;
+    glm::mat4 view = m_camera->getViewMatrix();
+    glm::mat4 proj = m_camera->getJitteredProjectionMatrix(aspect);
+    glm::mat4 viewProj = proj * view;
+
+    if (m_taaPass) {
+        // On the first TAA frame (or after a resize) the history is just the
+        // current frame, so prev matrices equal current matrices.
+        if (m_taaFrameIndex == 0) {
+            m_prevView = view;
+            m_prevProj = proj;
+            m_prevViewProj = viewProj;
+        }
+
+        m_taaPass->setEnabled(taaEnabled);
+        m_taaPass->setMatrices(glm::inverse(viewProj), m_prevViewProj);
+
+        // Ensure the RenderGraph knows which physical images the ping-pong
+        // handles currently refer to.
+        uint32_t readIdx = m_taaHistoryReadIndex;
+        uint32_t writeIdx = 1 - readIdx;
+        m_renderGraph->bindImportedTexture(
+            m_taaHistoryHandles[readIdx],
+            m_taaHistoryImages[readIdx]->handle(),
+            m_taaHistoryImages[readIdx]->view());
+        m_renderGraph->bindImportedTexture(
+            m_taaHistoryHandles[writeIdx],
+            m_taaHistoryImages[writeIdx]->handle(),
+            m_taaHistoryImages[writeIdx]->view());
+    }
+
     PassExecuteContext passCtx{};
     passCtx.cmd = frame.cmd;
     passCtx.imageIndex = frame.imageIndex;
     passCtx.camera = m_camera;
     passCtx.light = &m_scene->directionalLight();
     m_renderGraph->execute(passCtx);
+
+    // ---- Prepare state for next frame ----
+    m_prevView = view;
+    m_prevProj = proj;
+    m_prevViewProj = viewProj;
+    if (taaEnabled) {
+        m_taaHistoryReadIndex = 1 - m_taaHistoryReadIndex;
+        ++m_taaFrameIndex;
+    }
+    // Reset jitter so non-TAA passes / ImGui use an unjittered projection.
+    m_camera->setJitter(glm::vec2(0.0f));
 }
 
 void DeferredShading::exposePanel(PanelDesc& desc) {
@@ -176,6 +348,43 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     ssaoItem.label = "Enable SSAO";
     ssaoItem.b.value = &m_lightingSettings.enableSSAO;
     desc.items.push_back(ssaoItem);
+
+    static const char* toneModes[] = {"Reinhard", "ACES"};
+    PanelItem toneModeItem{};
+    toneModeItem.type = PanelItem::Enum;
+    toneModeItem.label = "Tone Mapping";
+    toneModeItem.e.value = &m_lightingSettings.toneMappingMode;
+    toneModeItem.e.names = toneModes;
+    toneModeItem.e.count = 2;
+    desc.items.push_back(toneModeItem);
+
+    PanelItem exposureItem{};
+    exposureItem.type = PanelItem::Float;
+    exposureItem.label = "Exposure";
+    exposureItem.f.value = &m_lightingSettings.exposure;
+    exposureItem.f.min = 0.1f;
+    exposureItem.f.max = 5.0f;
+    desc.items.push_back(exposureItem);
+
+    PanelItem gammaItem{};
+    gammaItem.type = PanelItem::Float;
+    gammaItem.label = "Gamma";
+    gammaItem.f.value = &m_lightingSettings.gamma;
+    gammaItem.f.min = 1.0f;
+    gammaItem.f.max = 3.0f;
+    desc.items.push_back(gammaItem);
+
+    PanelItem fxaaItem{};
+    fxaaItem.type = PanelItem::Bool;
+    fxaaItem.label = "Enable FXAA";
+    fxaaItem.b.value = &m_lightingSettings.enableFXAA;
+    desc.items.push_back(fxaaItem);
+
+    PanelItem taaItem{};
+    taaItem.type = PanelItem::Bool;
+    taaItem.label = "Enable TAA";
+    taaItem.b.value = &m_lightingSettings.enableTAA;
+    desc.items.push_back(taaItem);
 
     desc.items.push_back({PanelItem::Separator, "", {}});
 

@@ -8,6 +8,8 @@
 #pragma once
 
 #include <memory>
+#include <array>
+#include <glm/glm.hpp>
 #include "pass/LightingPass.h"
 #include "rendergraph/RenderGraph.h"
 #include "technique/Technique.h"
@@ -25,6 +27,10 @@ class LightVisualizePass;
 class SSAOPass;
 class SSAOBlurPass;
 class Texture;
+class TonemapPass;
+class FXAAPass;
+class TAAPass;
+class Image;
 
 class DeferredShading : public Technique {
 public:
@@ -74,7 +80,20 @@ private:
     std::unique_ptr<ShadowMapPass> m_shadowMapPass;
     std::unique_ptr<SSAOPass>     m_ssaoPass;
     std::unique_ptr<SSAOBlurPass> m_ssaoBlurPass;
+    std::unique_ptr<TonemapPass>  m_tonemapPass;
+    std::unique_ptr<TAAPass>      m_taaPass;
+    std::unique_ptr<FXAAPass>     m_fxaaPass;
     std::unique_ptr<RenderGraph>  m_renderGraph;
+
+    // TAA persistent history ping-pong buffers.
+    std::array<std::unique_ptr<Image>, 2> m_taaHistoryImages;
+    std::array<RenderGraph::ResourceHandle, 2> m_taaHistoryHandles = {
+        RenderGraph::InvalidResource, RenderGraph::InvalidResource};
+    uint32_t m_taaHistoryReadIndex = 0;
+    glm::mat4 m_prevView = glm::mat4(1.0f);
+    glm::mat4 m_prevProj = glm::mat4(1.0f);
+    glm::mat4 m_prevViewProj = glm::mat4(1.0f);
+    uint32_t m_taaFrameIndex = 0;
 
     RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;
     bool m_lightingSettingsInitialized = false;

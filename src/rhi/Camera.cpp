@@ -81,4 +81,12 @@ glm::mat4 Camera::getProjectionMatrix(float aspect) const {
     return proj;
 }
 
+glm::mat4 Camera::getJitteredProjectionMatrix(float aspect) const {
+    glm::mat4 proj = getProjectionMatrix(aspect);
+    // Sub-pixel jitter in NDC space.
+    proj[2][0] += m_jitter.x;
+    proj[2][1] += m_jitter.y;
+    return proj;
+}
+
 } // namespace kazu

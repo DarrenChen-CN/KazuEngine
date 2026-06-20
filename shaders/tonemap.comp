@@ -1,0 +1,41 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba8) uniform writeonly image2D ldrImage;
+layout(binding = 1) uniform sampler2D hdrSampler;
+
+layout(push_constant) uniform Push {
+    float exposure;
+    float gamma;
+    int   mode; // 0 = Reinhard, 1 = ACES
+} pc;
+
+vec3 reinhard(vec3 hdr) {
+    return hdr / (hdr + vec3(1.0));
+}
+
+// ACES approximation (Krzysztof Narkowicz)
+vec3 aces(vec3 x) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(ldrImage);
+    if (any(greaterThanEqual(texel, size))) return;
+
+    vec2 uv  = (vec2(texel) + vec2(0.5)) / vec2(size);
+    vec3 hdr = texture(hdrSampler, uv).rgb;
+    hdr *= pc.exposure;
+
+    vec3 mapped = (pc.mode == 1) ? aces(hdr) : reinhard(hdr);
+    vec3 ldr    = pow(mapped, vec3(1.0 / pc.gamma));
+
+    imageStore(ldrImage, texel, vec4(ldr, 1.0));
+}

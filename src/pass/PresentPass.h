@@ -1,7 +1,7 @@
 // ============================================================================
 // KazuEngine - Pass Layer: Present Pass
 //
-// Samples HDR scene color and writes to the imported swapchain image.
+// Samples LDR scene color (output of TonemapPass) and writes to the imported swapchain image.
 // AppUI remains outside the RenderGraph and overlays after this pass.
 // ============================================================================
 

@@ -27,6 +27,11 @@ enum LightingDebugView : int {
     LightingDebugView_ShadowMap = 3,
 };
 
+enum ToneMappingMode : int {
+    ToneMappingMode_Reinhard = 0,
+    ToneMappingMode_ACES = 1,
+};
+
 struct LightingSettings {
     int lightingModel = LightingModel_PBR;
     int shadowMode = ShadowMode_Hard;
@@ -41,6 +46,11 @@ struct LightingSettings {
     bool enableSSAO = false;
     bool enableBloom = false;
     bool enableTAA = false;
+    bool enableFXAA = true;
+
+    float exposure = 1.0f;
+    float gamma = 2.2f;
+    int   toneMappingMode = ToneMappingMode_ACES;
 };
 
 struct EnvironmentSettings {

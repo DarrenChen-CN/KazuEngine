@@ -2,7 +2,7 @@
 // KazuEngine - Pass Layer: BRDF LUT Precompute Pass (Implementation)
 // ============================================================================
 
-#include "pass/BRDFLutPass.h"
+#include "precompute/BRDFLutPass.h"
 #include "core/Utils.h"
 #include "core/Path.h"
 #include "core/CommandBuffer.h"
