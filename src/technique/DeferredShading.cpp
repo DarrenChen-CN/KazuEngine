@@ -192,7 +192,8 @@ void DeferredShading::onInit() {
     m_bloomPass->declare(m_rhi, m_renderGraph.get());
 
     m_tonemapPass = std::make_unique<TonemapPass>();
-    m_tonemapPass->setInput(m_bloomPass->outputHandle());
+    // Tonemap reads the original HDR scene color (after TAA) and the bloom contribution.
+    m_tonemapPass->setInput(m_taaPass->outputHandle());
     m_tonemapPass->setBloomInput(m_bloomPass->outputHandle());
     m_tonemapPass->declare(m_rhi, m_renderGraph.get());
 
