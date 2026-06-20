@@ -14,7 +14,6 @@
 #include "precompute/EquirectToCubePass.h"
 #include "precompute/IrradiancePass.h"
 #include "precompute/PrefilterEnvPass.h"
-#include "precompute/CubemapTonemapPass.h"
 #include "pass/BRDFLutPass.h"
 #include "rhi/Texture.h"
 #include "rendergraph/RenderGraph.h"
@@ -134,22 +133,8 @@ bool Application::init(const std::string& scenePath) {
     if (env.enabled && !env.hdrPath.empty()) {
         m_equirectTexture = std::make_unique<Texture>(m_rhi->ctx(), env.hdrPath, false);
         m_precomputeManager->registerPass(std::make_unique<EquirectToCubePass>(m_equirectTexture.get()));
-        // Tonemapped LDR debug arrays for ImGui visualization.
-        m_precomputeManager->registerPass(std::make_unique<CubemapTonemapPass>("EnvironmentCube", "EnvironmentDebug", 128, 0.5f, 2.2f));
         m_precomputeManager->registerPass(std::make_unique<IrradiancePass>());
         m_precomputeManager->registerPass(std::make_unique<PrefilterEnvPass>(128));
-        // Tonemapped LDR debug for each prefilter mip.
-        {
-            uint32_t prefilterMips = PrefilterEnvPass::mipCountForSize(128);
-            for (uint32_t mip = 0; mip < prefilterMips; ++mip) {
-                m_precomputeManager->registerPass(
-                    std::make_unique<CubemapTonemapPass>(
-                        "PrefilterEnv",
-                        "PrefilterDebug_Mip" + std::to_string(mip),
-                        128, 0.5f, 2.2f, mip));
-            }
-        }
-        m_precomputeManager->registerPass(std::make_unique<CubemapTonemapPass>("Irradiance", "IrradianceDebug", 128, 0.5f, 2.2f));
     }
 
     m_precomputeManager->run();
@@ -179,51 +164,6 @@ bool Application::init(const std::string& scenePath) {
 
     m_appUI = std::make_unique<AppUI>();
     m_appUI->init(m_rhi.get(), m_window);
-
-    // ImGui debug visualization: environment / irradiance cubemap faces.
-    auto makeFaceViews = [](Texture* tex) {
-        std::vector<VkImageView> views;
-        views.reserve(6);
-        for (uint32_t face = 0; face < 6; ++face) {
-            views.push_back(tex->image()->createView({
-                VK_IMAGE_VIEW_TYPE_2D,
-                tex->image()->format(),
-                0, 1,
-                face, 1}));
-        }
-        return views;
-    };
-    if (Texture* envDebug = m_precomputeManager->getTexture("EnvironmentDebug")) {
-        m_appUI->setEnvironmentDebugViews(envDebug->sampler(), makeFaceViews(envDebug));
-    }
-    if (Texture* irradianceDebug = m_precomputeManager->getTexture("IrradianceDebug")) {
-        m_appUI->setIBLDebugViews(irradianceDebug->sampler(), makeFaceViews(irradianceDebug));
-    }
-
-    // ImGui debug visualization: prefiltered env map, one cross per mip (tonemapped LDR).
-    {
-        uint32_t prefilterMips = PrefilterEnvPass::mipCountForSize(128);
-        std::vector<VkImageView> prefilterViews;
-        prefilterViews.reserve(prefilterMips * 6);
-        VkSampler prefilterDebugSampler = VK_NULL_HANDLE;
-        for (uint32_t mip = 0; mip < prefilterMips; ++mip) {
-            Texture* tex = m_precomputeManager->getTexture("PrefilterDebug_Mip" + std::to_string(mip));
-            if (!tex) continue;
-            if (prefilterDebugSampler == VK_NULL_HANDLE) {
-                prefilterDebugSampler = tex->sampler();
-            }
-            for (uint32_t face = 0; face < 6; ++face) {
-                prefilterViews.push_back(tex->image()->createView({
-                    VK_IMAGE_VIEW_TYPE_2D,
-                    tex->image()->format(),
-                    0, 1,
-                    face, 1}));
-            }
-        }
-        if (prefilterDebugSampler != VK_NULL_HANDLE && !prefilterViews.empty()) {
-            m_appUI->setPrefilterDebugViews(prefilterDebugSampler, prefilterViews, prefilterMips);
-        }
-    }
 
     return true;
 }
@@ -268,7 +208,6 @@ void Application::recordFrame(uint32_t imageIndex) {
     PanelDesc desc;
     m_technique->exposePanel(desc);
     m_appUI->drawPanel(desc);
-    m_appUI->drawIBLDebug();
     m_appUI->endFrame(m_rhi->currentCmd(), imageIndex);
 }
 
