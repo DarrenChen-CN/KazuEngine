@@ -22,6 +22,8 @@ class GBufferPass;
 class PresentPass;
 class ShadowMapPass;
 class LightVisualizePass;
+class SSAOPass;
+class SSAOBlurPass;
 class Texture;
 
 class DeferredShading : public Technique {
@@ -70,6 +72,8 @@ private:
     std::unique_ptr<LightVisualizePass> m_lightVisualizePass;
     std::unique_ptr<PresentPass>  m_presentPass;
     std::unique_ptr<ShadowMapPass> m_shadowMapPass;
+    std::unique_ptr<SSAOPass>     m_ssaoPass;
+    std::unique_ptr<SSAOBlurPass> m_ssaoBlurPass;
     std::unique_ptr<RenderGraph>  m_renderGraph;
 
     RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;

@@ -160,6 +160,8 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/irradiance.comp
     ${SHADER_SOURCE_DIR}/cubemap_tonemap.comp
     ${SHADER_SOURCE_DIR}/prefilter_env.comp
+    ${SHADER_SOURCE_DIR}/ssao.comp
+    ${SHADER_SOURCE_DIR}/ssao_blur.comp
 )
 
 foreach(SHADER ${SHADERS})

@@ -110,7 +110,7 @@ void PrefilterEnvPass::createDescriptorSets() {
 
     std::array<VkDescriptorPoolSize, 2> poolSizes{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[0].descriptorCount = 1;
+    poolSizes[0].descriptorCount = m_mipLevels;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[1].descriptorCount = m_mipLevels;
 

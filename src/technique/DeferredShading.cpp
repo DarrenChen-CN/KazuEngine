@@ -8,6 +8,8 @@
 #include "pass/LightVisualizePass.h"
 #include "pass/PresentPass.h"
 #include "pass/ShadowMapPass.h"
+#include "pass/SSAOPass.h"
+#include "pass/SSAOBlurPass.h"
 #include "app/AppUI.h"
 #include "core/Utils.h"
 #include "rhi/RHI.h"
@@ -57,13 +59,24 @@ void DeferredShading::onInit() {
     m_shadowMapPass = std::make_unique<ShadowMapPass>();
     m_shadowMapPass->declare(m_rhi, m_renderGraph.get());
 
+    m_ssaoPass = std::make_unique<SSAOPass>();
+    m_ssaoPass->setInputs(
+        m_gbufferPass->normalHandle(),
+        m_gbufferPass->depthHandle());
+    m_ssaoPass->declare(m_rhi, m_renderGraph.get());
+
+    m_ssaoBlurPass = std::make_unique<SSAOBlurPass>();
+    m_ssaoBlurPass->setInputAO(m_ssaoPass->aoHandle());
+    m_ssaoBlurPass->declare(m_rhi, m_renderGraph.get());
+
     m_lightingPass = std::make_unique<LightingPass>();
     m_lightingPass->setInputs(
         m_gbufferPass->albedoHandle(),
         m_gbufferPass->normalHandle(),
         m_gbufferPass->depthHandle(),
         m_gbufferPass->materialHandle(),
-        m_shadowMapPass->shadowMapHandle());
+        m_shadowMapPass->shadowMapHandle(),
+        m_ssaoBlurPass->blurredAOHandle());
     m_lightingPass->setIBL(m_iblIrradiance, m_iblPrefilter, m_iblLut);
     m_lightingPass->setEnvironment(m_environmentMap);
     m_lightingPass->declare(m_rhi, m_renderGraph.get());
@@ -95,6 +108,8 @@ void DeferredShading::onInit() {
                             m_rhi->dslCache());
 
     m_shadowMapPass->create(passCtx);
+    m_ssaoPass->create(passCtx);
+    m_ssaoBlurPass->create(passCtx);
     m_lightingPass->create(passCtx);
     m_lightVisualizePass->create(passCtx);
     m_presentPass->create(passCtx);
@@ -155,6 +170,12 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     shadowModeItem.e.names = shadowModes;
     shadowModeItem.e.count = 5;
     desc.items.push_back(shadowModeItem);
+
+    PanelItem ssaoItem{};
+    ssaoItem.type = PanelItem::Bool;
+    ssaoItem.label = "Enable SSAO";
+    ssaoItem.b.value = &m_lightingSettings.enableSSAO;
+    desc.items.push_back(ssaoItem);
 
     desc.items.push_back({PanelItem::Separator, "", {}});
 

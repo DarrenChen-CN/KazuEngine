@@ -44,7 +44,8 @@ public:
                    RenderGraph::ResourceHandle normal,
                    RenderGraph::ResourceHandle depth,
                    RenderGraph::ResourceHandle material,
-                   RenderGraph::ResourceHandle shadowMap = RenderGraph::InvalidResource);
+                   RenderGraph::ResourceHandle shadowMap = RenderGraph::InvalidResource,
+                   RenderGraph::ResourceHandle ssao = RenderGraph::InvalidResource);
 
     void setIBL(Texture* irradiance, Texture* prefilter, Texture* brdfLut);
     void setEnvironment(Texture* environmentCube);
@@ -62,6 +63,7 @@ private:
     RenderGraph::ResourceHandle m_depthHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_materialHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_shadowMapHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_ssaoHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_sceneColorHandle = RenderGraph::InvalidResource;
 
     ShaderEffect*    m_effect         = nullptr;
@@ -80,6 +82,7 @@ private:
     std::unique_ptr<Texture> m_dummyIrradiance;
     std::unique_ptr<Texture> m_dummyPrefilter;
     std::unique_ptr<Texture> m_dummyLut;
+    std::unique_ptr<Texture> m_dummySSAO;
     std::unique_ptr<Texture> m_dummyEnv;
 
     LightingSettings m_settings;

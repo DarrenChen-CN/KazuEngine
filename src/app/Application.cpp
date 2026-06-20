@@ -14,7 +14,7 @@
 #include "precompute/EquirectToCubePass.h"
 #include "precompute/IrradiancePass.h"
 #include "precompute/PrefilterEnvPass.h"
-#include "pass/BRDFLutPass.h"
+#include "precompute/BRDFLutPass.h"
 #include "rhi/Texture.h"
 #include "rendergraph/RenderGraph.h"
 #include <spdlog/spdlog.h>

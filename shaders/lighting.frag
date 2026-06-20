@@ -15,6 +15,7 @@ layout(set = 0, binding = 5) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 6) uniform samplerCube prefilterMap;
 layout(set = 0, binding = 7) uniform sampler2D brdfLUT;
 layout(set = 0, binding = 8) uniform samplerCube environmentMap;
+layout(set = 0, binding = 9) uniform sampler2D ssaoSampler;
 
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
@@ -31,6 +32,7 @@ layout(push_constant) uniform PushConstants {
     int lightingModel;
     int iblEnabled;
     int envEnabled;
+    int ssaoEnabled;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -238,7 +240,7 @@ vec3 evaluateIBL(vec3 albedo, float metallic, float roughness, vec3 N, vec3 V, f
     vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
     vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
 
-    return (kD * diffuse + specular); // DEBUG: ignore AO
+    return (kD * diffuse * ao + specular);
 }
 
 vec3 evaluateAmbientApprox(vec3 albedo, float metallic, float roughness, float ao) {
@@ -300,13 +302,16 @@ void main() {
         direct = albedo * radiance * diff;
     }
 
+    float ssaoTerm = (pc.ssaoEnabled == 1) ? texture(ssaoSampler, fragTexCoord).r : 1.0;
+    float finalAO = ao * ssaoTerm;
+
     vec3 ambient;
     if (pc.lightingModel == 1 && pc.iblEnabled == 1) {
-        ambient = evaluateIBL(albedo, metallic, roughness, normal, viewDir, ao);
+        ambient = evaluateIBL(albedo, metallic, roughness, normal, viewDir, finalAO);
     } else if (pc.lightingModel == 1) {
-        ambient = evaluateAmbientApprox(albedo, metallic, roughness, ao);
+        ambient = evaluateAmbientApprox(albedo, metallic, roughness, finalAO);
     } else {
-        ambient = albedo * 0.03 * ao;
+        ambient = albedo * 0.03 * finalAO;
     }
     vec3 color = ambient + direct * (1.0 - shadow);
     outColor = vec4(color, 1.0);

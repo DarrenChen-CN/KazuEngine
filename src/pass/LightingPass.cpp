@@ -37,6 +37,7 @@ struct LightingPush {
     int       lightingModel;
     int       iblEnabled;
     int       envEnabled;
+    int       ssaoEnabled;
 };
 
 std::unique_ptr<Texture> createBlackTextureCube(Context& ctx, VkFormat format) {
@@ -104,6 +105,42 @@ std::unique_ptr<Texture> createBlackTexture2D(Context& ctx, VkFormat format) {
     return std::make_unique<Texture>(ctx, std::move(image), samplerInfo);
 }
 
+std::unique_ptr<Texture> createWhiteTexture2D(Context& ctx, VkFormat format) {
+    ImageDesc desc{};
+    desc.type = VK_IMAGE_TYPE_2D;
+    desc.extent = {1, 1, 1};
+    desc.mipLevels = 1;
+    desc.arrayLayers = 1;
+    desc.format = format;
+    desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    auto image = std::make_unique<Image>(ctx, desc);
+
+    CommandBuffer cmd(ctx, ctx.transientPool());
+    cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    image->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkClearColorValue clear{};
+    clear.float32[0] = 1.0f;
+    clear.float32[1] = 1.0f;
+    clear.float32[2] = 1.0f;
+    clear.float32[3] = 1.0f;
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cmd.handle(), image->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    image->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    cmd.end();
+    cmd.submit(ctx.graphicsQueue());
+    vkQueueWaitIdle(ctx.graphicsQueue());
+
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    return std::make_unique<Texture>(ctx, std::move(image), samplerInfo);
+}
+
 } // anonymous namespace
 
 LightingPass::LightingPass() = default;
@@ -124,12 +161,14 @@ void LightingPass::setInputs(RenderGraph::ResourceHandle albedo,
                                 RenderGraph::ResourceHandle normal,
                                 RenderGraph::ResourceHandle depth,
                                 RenderGraph::ResourceHandle material,
-                                RenderGraph::ResourceHandle shadowMap) {
+                                RenderGraph::ResourceHandle shadowMap,
+                                RenderGraph::ResourceHandle ssao) {
     m_albedoHandle = albedo;
     m_normalHandle = normal;
     m_depthHandle = depth;
     m_materialHandle = material;
     m_shadowMapHandle = shadowMap;
+    m_ssaoHandle = ssao;
 }
 
 void LightingPass::setIBL(Texture* irradiance, Texture* prefilter, Texture* brdfLut) {
@@ -159,6 +198,8 @@ void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
         b.read(self->m_materialHandle);
         if(self->m_shadowMapHandle != RenderGraph::InvalidResource)
             b.read(self->m_shadowMapHandle);
+        if(self->m_ssaoHandle != RenderGraph::InvalidResource)
+            b.read(self->m_ssaoHandle);
         b.writeColor(0, self->m_sceneColorHandle);
         b.execute = [self](const PassExecuteContext& ctx) {
             self->execute(ctx);
@@ -211,6 +252,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
         if (!m_prefilterMap)  m_dummyPrefilter  = createBlackTextureCube(m_rhi->ctx(), VK_FORMAT_R16G16B16A16_SFLOAT);
         if (!m_brdfLut)       m_dummyLut        = createBlackTexture2D(m_rhi->ctx(), VK_FORMAT_R8G8B8A8_UNORM);
         if (!m_environmentMap) m_dummyEnv       = createBlackTextureCube(m_rhi->ctx(), VK_FORMAT_R16G16B16A16_SFLOAT);
+        if (!m_ssaoHandle)     m_dummySSAO      = createWhiteTexture2D(m_rhi->ctx(), VK_FORMAT_R8_UNORM);
 
         Texture* irradianceTex = m_irradianceMap ? m_irradianceMap : m_dummyIrradiance.get();
         Texture* prefilterTex  = m_prefilterMap  ? m_prefilterMap  : m_dummyPrefilter.get();
@@ -221,7 +263,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
 
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 9;
+        poolSize.descriptorCount = 10;
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets = 1;
@@ -240,8 +282,11 @@ void LightingPass::create(const PassCreateContext& ctx) {
         VkImageView shadowMapView = (m_shadowMapHandle != RenderGraph::InvalidResource)
             ? m_renderGraph->getImageView(m_shadowMapHandle)
             : depthView;
+        VkImageView ssaoView = (m_ssaoHandle != RenderGraph::InvalidResource)
+            ? m_renderGraph->getImageView(m_ssaoHandle)
+            : m_dummySSAO->image()->view();
 
-        VkDescriptorImageInfo imageInfos[9]{};
+        VkDescriptorImageInfo imageInfos[10]{};
         imageInfos[0].sampler = m_sampler;
         imageInfos[0].imageView = albedoView;
         imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -269,9 +314,12 @@ void LightingPass::create(const PassCreateContext& ctx) {
         imageInfos[8].sampler = m_sampler;
         imageInfos[8].imageView = envTex->view();
         imageInfos[8].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[9].sampler = m_sampler;
+        imageInfos[9].imageView = ssaoView;
+        imageInfos[9].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet writes[9]{};
-        for (int i = 0; i < 9; ++i) {
+        VkWriteDescriptorSet writes[10]{};
+        for (int i = 0; i < 10; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = m_descriptorSet;
             writes[i].dstBinding = i;
@@ -280,7 +328,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
             writes[i].descriptorCount = 1;
             writes[i].pImageInfo = &imageInfos[i];
         }
-        vkUpdateDescriptorSets(m_rhi->ctx().device(), 9, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_rhi->ctx().device(), 10, writes, 0, nullptr);
     }
 }
 
@@ -341,6 +389,7 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
     push.lightingModel = m_settings.lightingModel;
     push.iblEnabled = m_iblEnabled ? 1 : 0;
     push.envEnabled = m_envEnabled ? 1 : 0;
+    push.ssaoEnabled = m_settings.enableSSAO ? 1 : 0;
     vkCmdPushConstants(cmd, m_effect->pipelineLayout(),
         VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(LightingPush), &push);
