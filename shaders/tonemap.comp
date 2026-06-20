@@ -35,8 +35,8 @@ void main() {
     vec2 uv  = (vec2(texel) + vec2(0.5)) / vec2(size);
     vec3 hdr = texture(hdrSampler, uv).rgb;
 
-    // Add bloom in HDR space before tone mapping.
-    vec3 bloom = texture(bloomSampler, uv).rgb;
+    // Add bloom in HDR space before tone mapping (force LOD 0 since Bloom is a mip-chain).
+    vec3 bloom = textureLod(bloomSampler, uv, 0.0).rgb;
     hdr += bloom * pc.bloomIntensity;
 
     hdr *= pc.exposure;
