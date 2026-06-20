@@ -51,6 +51,9 @@ struct LightingSettings {
     float exposure = 1.0f;
     float gamma = 2.2f;
     int   toneMappingMode = ToneMappingMode_ACES;
+
+    float bloomThreshold = 1.0f;
+    float bloomIntensity = 0.1f;
 };
 
 struct EnvironmentSettings {

@@ -17,7 +17,7 @@ struct TonemapPush {
     float exposure;
     float gamma;
     int   mode;
-    int   _pad;
+    float bloomIntensity;
 };
 
 TonemapPass::TonemapPass() = default;
@@ -78,7 +78,7 @@ void TonemapPass::createPipeline() {
     samplerInfo.maxLod = 32.0f;
     VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_sampler));
 
-    std::vector<VkDescriptorSetLayoutBinding> bindings(2);
+    std::vector<VkDescriptorSetLayoutBinding> bindings(3);
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -87,6 +87,10 @@ void TonemapPass::createPipeline() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     m_descriptorSetLayout = m_rhi->dslCache().getOrCreate(bindings);
 
@@ -124,7 +128,7 @@ void TonemapPass::createDescriptorSet() {
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[0].descriptorCount = 1;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = 1;
+    poolSizes[1].descriptorCount = 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -142,6 +146,7 @@ void TonemapPass::createDescriptorSet() {
 
     VkImageView ldrView   = m_renderGraph->getImageView(m_outputLDRHandle);
     VkImageView inputView = m_renderGraph->getImageView(m_inputHDRHandle);
+    VkImageView bloomView = m_renderGraph->getImageView(m_bloomHandle);
 
     VkDescriptorImageInfo outInfo{};
     outInfo.imageView = ldrView;
@@ -153,7 +158,12 @@ void TonemapPass::createDescriptorSet() {
     inInfo.imageView = inputView;
     inInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    std::array<VkWriteDescriptorSet, 2> writes{};
+    VkDescriptorImageInfo bloomInfo{};
+    bloomInfo.sampler = m_sampler;
+    bloomInfo.imageView = bloomView;
+    bloomInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    std::array<VkWriteDescriptorSet, 3> writes{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = m_descriptorSet;
     writes[0].dstBinding = 0;
@@ -168,6 +178,13 @@ void TonemapPass::createDescriptorSet() {
     writes[1].descriptorCount = 1;
     writes[1].pImageInfo = &inInfo;
 
+    writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[2].dstSet = m_descriptorSet;
+    writes[2].dstBinding = 2;
+    writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[2].descriptorCount = 1;
+    writes[2].pImageInfo = &bloomInfo;
+
     vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
@@ -178,7 +195,7 @@ void TonemapPass::execute(const PassExecuteContext& ctx) {
     push.exposure = m_exposure;
     push.gamma    = m_gamma;
     push.mode     = m_mode;
-    push._pad     = 0;
+    push.bloomIntensity = m_bloomIntensity;
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(TonemapPush), &push);

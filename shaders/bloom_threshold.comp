@@ -1,0 +1,36 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0, rgba16f) uniform writeonly image2D outBloom;
+layout(binding = 1) uniform sampler2D hdrSampler;
+
+layout(push_constant) uniform Push {
+    float threshold;
+    float intensity;
+    float upsampleRadius;
+    int   enabled;
+} pc;
+
+const vec3 LumaWeights = vec3(0.2126, 0.7152, 0.0722);
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size  = imageSize(outBloom);
+    if (any(greaterThanEqual(texel, size))) return;
+
+    vec2 uv = (vec2(texel) + vec2(0.5)) / vec2(size);
+
+    if (pc.enabled == 0) {
+        imageStore(outBloom, texel, vec4(0.0, 0.0, 0.0, 1.0));
+        return;
+    }
+
+    vec3 color = texture(hdrSampler, uv).rgb;
+    float luma = dot(color, LumaWeights);
+
+    // Keep the color direction but scale by the amount above the threshold.
+    vec3 bloom = color * max(luma - pc.threshold, 0.0) / max(luma, 1e-5);
+
+    imageStore(outBloom, texel, vec4(bloom, 1.0));
+}

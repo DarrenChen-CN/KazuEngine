@@ -160,6 +160,9 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/irradiance.comp
     ${SHADER_SOURCE_DIR}/prefilter_env.comp
     ${SHADER_SOURCE_DIR}/tonemap.comp
+    ${SHADER_SOURCE_DIR}/bloom_threshold.comp
+    ${SHADER_SOURCE_DIR}/bloom_downsample.comp
+    ${SHADER_SOURCE_DIR}/bloom_upsample.comp
     ${SHADER_SOURCE_DIR}/ssao.comp
     ${SHADER_SOURCE_DIR}/ssao_blur.comp
     ${SHADER_SOURCE_DIR}/fxaa.comp

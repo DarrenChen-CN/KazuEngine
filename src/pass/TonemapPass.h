@@ -26,10 +26,12 @@ public:
     void execute(const PassExecuteContext& ctx) override;
 
     void setInput(RenderGraph::ResourceHandle hdr) { m_inputHDRHandle = hdr; }
+    void setBloomInput(RenderGraph::ResourceHandle bloom) { m_bloomHandle = bloom; }
 
     void setExposure(float exposure) { m_exposure = exposure; }
     void setGamma(float gamma) { m_gamma = gamma; }
     void setMode(int mode) { m_mode = mode; }
+    void setBloomIntensity(float intensity) { m_bloomIntensity = intensity; }
 
     RenderGraph::ResourceHandle outputHandle() const { return m_outputLDRHandle; }
 
@@ -42,6 +44,7 @@ private:
     RenderGraph::PassHandle m_passHandle = 0;
 
     RenderGraph::ResourceHandle m_inputHDRHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_bloomHandle    = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_outputLDRHandle = RenderGraph::InvalidResource;
 
     VkPipeline        m_pipeline        = VK_NULL_HANDLE;
@@ -54,6 +57,7 @@ private:
     float m_exposure = 1.0f;
     float m_gamma    = 2.2f;
     int   m_mode     = 1; // 0 = Reinhard, 1 = ACES
+    float m_bloomIntensity = 0.0f;
 };
 
 } // namespace kazu

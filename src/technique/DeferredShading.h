@@ -30,6 +30,7 @@ class Texture;
 class TonemapPass;
 class FXAAPass;
 class TAAPass;
+class BloomPass;
 class Image;
 
 class DeferredShading : public Technique {
@@ -82,6 +83,7 @@ private:
     std::unique_ptr<SSAOBlurPass> m_ssaoBlurPass;
     std::unique_ptr<TonemapPass>  m_tonemapPass;
     std::unique_ptr<TAAPass>      m_taaPass;
+    std::unique_ptr<BloomPass>    m_bloomPass;
     std::unique_ptr<FXAAPass>     m_fxaaPass;
     std::unique_ptr<RenderGraph>  m_renderGraph;
 

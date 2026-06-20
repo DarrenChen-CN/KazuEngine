@@ -96,6 +96,10 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
                 features.value("bloom", m_rendererSettings.lighting.enableBloom);
             m_rendererSettings.lighting.enableTAA =
                 features.value("taa", m_rendererSettings.lighting.enableTAA);
+            m_rendererSettings.lighting.bloomThreshold =
+                features.value("bloomThreshold", m_rendererSettings.lighting.bloomThreshold);
+            m_rendererSettings.lighting.bloomIntensity =
+                features.value("bloomIntensity", m_rendererSettings.lighting.bloomIntensity);
         }
     }
 

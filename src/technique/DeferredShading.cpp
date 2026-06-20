@@ -13,6 +13,7 @@
 #include "pass/TonemapPass.h"
 #include "pass/FXAAPass.h"
 #include "pass/TAAPass.h"
+#include "pass/BloomPass.h"
 #include "app/AppUI.h"
 #include "core/Utils.h"
 #include "core/Image.h"
@@ -186,8 +187,13 @@ void DeferredShading::onInit() {
     m_taaPass->setHistoryWrite(m_taaHistoryHandles[1]);
     m_taaPass->declare(m_rhi, m_renderGraph.get());
 
+    m_bloomPass = std::make_unique<BloomPass>();
+    m_bloomPass->setInputHDR(m_taaPass->outputHandle());
+    m_bloomPass->declare(m_rhi, m_renderGraph.get());
+
     m_tonemapPass = std::make_unique<TonemapPass>();
-    m_tonemapPass->setInput(m_taaPass->outputHandle());
+    m_tonemapPass->setInput(m_bloomPass->outputHandle());
+    m_tonemapPass->setBloomInput(m_bloomPass->outputHandle());
     m_tonemapPass->declare(m_rhi, m_renderGraph.get());
 
     m_fxaaPass = std::make_unique<FXAAPass>();
@@ -222,6 +228,7 @@ void DeferredShading::onInit() {
     m_lightingPass->create(passCtx);
     m_lightVisualizePass->create(passCtx);
     m_taaPass->create(passCtx);
+    m_bloomPass->create(passCtx);
     m_tonemapPass->create(passCtx);
     m_fxaaPass->create(passCtx);
     m_presentPass->create(passCtx);
@@ -246,10 +253,17 @@ void DeferredShading::render(const RenderFrameContext& frame) {
         m_lightingPass->setSettings(m_lightingSettings);
     }
 
+    if (m_bloomPass) {
+        m_bloomPass->setEnabled(m_lightingSettings.enableBloom);
+        m_bloomPass->setThreshold(m_lightingSettings.bloomThreshold);
+        m_bloomPass->setIntensity(m_lightingSettings.bloomIntensity);
+    }
+
     if (m_tonemapPass) {
         m_tonemapPass->setExposure(m_lightingSettings.exposure);
         m_tonemapPass->setGamma(m_lightingSettings.gamma);
         m_tonemapPass->setMode(m_lightingSettings.toneMappingMode);
+        m_tonemapPass->setBloomIntensity(m_lightingSettings.bloomIntensity);
     }
 
     if (m_fxaaPass) {
@@ -373,6 +387,28 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     gammaItem.f.min = 1.0f;
     gammaItem.f.max = 3.0f;
     desc.items.push_back(gammaItem);
+
+    PanelItem bloomEnableItem{};
+    bloomEnableItem.type = PanelItem::Bool;
+    bloomEnableItem.label = "Enable Bloom";
+    bloomEnableItem.b.value = &m_lightingSettings.enableBloom;
+    desc.items.push_back(bloomEnableItem);
+
+    PanelItem bloomThresholdItem{};
+    bloomThresholdItem.type = PanelItem::Float;
+    bloomThresholdItem.label = "Bloom Threshold";
+    bloomThresholdItem.f.value = &m_lightingSettings.bloomThreshold;
+    bloomThresholdItem.f.min = 0.0f;
+    bloomThresholdItem.f.max = 5.0f;
+    desc.items.push_back(bloomThresholdItem);
+
+    PanelItem bloomIntensityItem{};
+    bloomIntensityItem.type = PanelItem::Float;
+    bloomIntensityItem.label = "Bloom Intensity";
+    bloomIntensityItem.f.value = &m_lightingSettings.bloomIntensity;
+    bloomIntensityItem.f.min = 0.0f;
+    bloomIntensityItem.f.max = 2.0f;
+    desc.items.push_back(bloomIntensityItem);
 
     PanelItem fxaaItem{};
     fxaaItem.type = PanelItem::Bool;
