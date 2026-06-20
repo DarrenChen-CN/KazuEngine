@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <GLFW/glfw3.h>
+#include <vulkan/vulkan.h>
 
 namespace kazu {
 
@@ -17,6 +18,8 @@ class Scene;
 class Camera;
 class Technique;
 class AppUI;
+class PrecomputeManager;
+class Texture;
 
 class Application {
 public:
@@ -53,6 +56,8 @@ private:
     std::unique_ptr<Camera> m_camera;
     std::unique_ptr<Technique> m_technique;
     std::unique_ptr<AppUI> m_appUI;
+    std::unique_ptr<PrecomputeManager> m_precomputeManager;
+    std::unique_ptr<Texture> m_equirectTexture;
 
     // Mouse input state
     int m_dragButton = -1;

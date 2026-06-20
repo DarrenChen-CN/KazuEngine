@@ -22,6 +22,7 @@ class GBufferPass;
 class PresentPass;
 class ShadowMapPass;
 class LightVisualizePass;
+class Texture;
 
 class DeferredShading : public Technique {
 public:
@@ -43,6 +44,9 @@ public:
     float lightWidth() const { return m_lightingSettings.lightWidth; }
     void setUsePCSS(bool use);
     bool usePCSS() const { return m_lightingSettings.shadowMode == ShadowMode_PCSS; }
+
+    void setIBL(Texture* irradiance, Texture* prefilter, Texture* brdfLut) override;
+    void setEnvironment(Texture* environmentCube) override;
 
     void render(const RenderFrameContext& frame) override;
 
@@ -70,6 +74,11 @@ private:
 
     RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;
     bool m_lightingSettingsInitialized = false;
+
+    Texture* m_iblIrradiance = nullptr;
+    Texture* m_iblPrefilter  = nullptr;
+    Texture* m_iblLut        = nullptr;
+    Texture* m_environmentMap = nullptr;
 };
 
 } // namespace kazu

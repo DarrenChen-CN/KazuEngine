@@ -20,6 +20,10 @@ class Texture {
 public:
     // Load from file (PNG/JPG/etc). Uploads to GPU via temporary command buffer.
     Texture(Context& ctx, const std::string& path, bool srgb = true);
+
+    // Wrap an existing Image + Sampler. Used for precomputed textures.
+    Texture(Context& ctx, std::unique_ptr<Image> image, const VkSamplerCreateInfo& samplerInfo);
+
     ~Texture() = default;
 
     Texture(const Texture&) = delete;
@@ -29,9 +33,12 @@ public:
 
     VkImageView view() const { return m_image->view(); }
     VkSampler sampler() const { return m_sampler->handle(); }
+    Image* image() const { return m_image.get(); }
     VkDescriptorImageInfo descriptorInfo() const;
 
 private:
+    void loadFromFile(Context& ctx, const std::string& path, bool srgb);
+
     Context* m_ctx = nullptr;
     std::unique_ptr<Image> m_image;
     std::unique_ptr<Sampler> m_sampler;

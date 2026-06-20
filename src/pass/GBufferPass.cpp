@@ -32,17 +32,25 @@ GBufferPass::~GBufferPass() = default;
 
 void GBufferPass::declare(RHI* rhi, RenderGraph* rg) {
     m_albedoHandle = rg->addTexture("Albedo",
-        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+        {.width = rhi->extent().width,
+         .height = rhi->extent().height,
+         .format = VK_FORMAT_R8G8B8A8_UNORM,
+         .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
     m_normalHandle = rg->addTexture("Normal",
-        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+        {.width = rhi->extent().width,
+         .height = rhi->extent().height,
+         .format = VK_FORMAT_R8G8B8A8_UNORM,
+         .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
     m_materialHandle = rg->addTexture("Material",
-        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R8G8B8A8_UNORM,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+        {.width = rhi->extent().width,
+         .height = rhi->extent().height,
+         .format = VK_FORMAT_R8G8B8A8_UNORM,
+         .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
     m_depthHandle = rg->addTexture("Depth",
-        {rhi->extent().width, rhi->extent().height, VK_FORMAT_D32_SFLOAT,
-         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+        {.width = rhi->extent().width,
+         .height = rhi->extent().height,
+         .format = VK_FORMAT_D32_SFLOAT,
+         .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
 
     GBufferPass* self = this;
     m_passHandle = rg->addPass("GBuffer", [&](RenderGraph::PassBuilder& b) {

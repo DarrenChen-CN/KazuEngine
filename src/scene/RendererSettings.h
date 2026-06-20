@@ -3,6 +3,7 @@
 // ============================================================================
 
 #pragma once
+#include <string>
 
 namespace kazu {
 
@@ -42,8 +43,14 @@ struct LightingSettings {
     bool enableTAA = false;
 };
 
+struct EnvironmentSettings {
+    std::string hdrPath;
+    bool enabled = false;
+};
+
 struct RendererSettings {
     LightingSettings lighting;
+    EnvironmentSettings environment;
 };
 
 } // namespace kazu

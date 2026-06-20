@@ -96,7 +96,7 @@ static const char* passTypeName(RenderGraph::PassType type) {
 RenderGraph::RenderGraph(Context& ctx) : m_ctx(&ctx) {}
 
 RenderGraph::~RenderGraph() {
-    cleanupPassRenderTargets();
+    clear();
 }
 
 // ============================================================================
@@ -180,6 +180,12 @@ RenderGraph::PassHandle RenderGraph::addPass(const char* name, PassSetupFn setup
     }
     if (builder.writeDepth_ != InvalidResource) {
         node.usages.push_back({builder.writeDepth_, ResourceUsage::DepthAttachmentWrite, ~0u});
+    }
+    for (ResourceHandle res : builder.readStorageImages) {
+        node.usages.push_back({res, ResourceUsage::StorageImageRead, ~0u});
+    }
+    for (ResourceHandle res : builder.writeStorageImages) {
+        node.usages.push_back({res, ResourceUsage::StorageImageWrite, ~0u});
     }
 
     PassHandle handle = static_cast<PassHandle>(m_passes.size());
@@ -272,11 +278,15 @@ void RenderGraph::allocateResources() {
         if (firstPass[i] == -1) continue; // unused, don't allocate
 
         res.ownedImage = std::make_unique<Image>(*m_ctx,
-                                                 res.desc.width,
-                                                 res.desc.height,
-                                                 res.desc.format,
-                                                 res.desc.usage,
-                                                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                                                 ImageDesc{
+                                                     VK_IMAGE_TYPE_2D,
+                                                     {res.desc.width, res.desc.height, 1},
+                                                     res.desc.mipLevels,
+                                                     res.desc.arrayLayers,
+                                                     res.desc.format,
+                                                     res.desc.usage,
+                                                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                                                     res.desc.flags});
     }
 }
 
@@ -297,7 +307,7 @@ struct UsageInfo {
     VkImageLayout layout;
 };
 
-static UsageInfo getUsageInfo(RenderGraph::ResourceUsage usage) {
+static UsageInfo getUsageInfo(RenderGraph::ResourceUsage usage, RenderGraph::PassType passType) {
     switch (usage) {
     case RenderGraph::ResourceUsage::ColorAttachmentWrite:
         return {
@@ -336,13 +346,19 @@ static UsageInfo getUsageInfo(RenderGraph::ResourceUsage usage) {
             VK_IMAGE_LAYOUT_GENERAL
         };
     case RenderGraph::ResourceUsage::SampledRead:
+        return {
+            static_cast<VkPipelineStageFlags>(
+                passType == RenderGraph::PassType::Compute ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT),
+            VK_ACCESS_SHADER_READ_BIT,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
     case RenderGraph::ResourceUsage::StorageBufferRead:
     case RenderGraph::ResourceUsage::StorageBufferWrite:
     default:
         return {
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
             VK_ACCESS_SHADER_READ_BIT,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            VK_IMAGE_LAYOUT_GENERAL
         };
     }
 }
@@ -392,7 +408,7 @@ void RenderGraph::deriveBarriers() {
             if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer
 
             const auto& oldState = states[rh];
-            UsageInfo readInfo = getUsageInfo(use.usage);
+            UsageInfo readInfo = getUsageInfo(use.usage, pass.type);
             emitBarrier(rh, oldState, readInfo);
             states[rh] = {readInfo.layout, readInfo.stage, readInfo.access};
         }
@@ -406,7 +422,7 @@ void RenderGraph::deriveBarriers() {
             if (res.desc.format == VK_FORMAT_UNDEFINED) continue; // buffer
 
             const auto& oldState = states[rh];
-            UsageInfo writeInfo = getUsageInfo(use.usage);
+            UsageInfo writeInfo = getUsageInfo(use.usage, pass.type);
             emitBarrier(rh, oldState, writeInfo);
             states[rh] = {writeInfo.layout, writeInfo.stage, writeInfo.access};
         }
@@ -632,9 +648,9 @@ void RenderGraph::execute(const PassExecuteContext& passCtx) const {
                 barrier.image = image;
                 barrier.subresourceRange.aspectMask = aspectMaskFromFormat(res.desc.format);
                 barrier.subresourceRange.baseMipLevel = 0;
-                barrier.subresourceRange.levelCount = 1;
+                barrier.subresourceRange.levelCount = res.desc.mipLevels;
                 barrier.subresourceRange.baseArrayLayer = 0;
-                barrier.subresourceRange.layerCount = 1;
+                barrier.subresourceRange.layerCount = res.desc.arrayLayers;
                 barrier.srcAccessMask = desc.srcAccess;
                 barrier.dstAccessMask = desc.dstAccess;
                 barriers.push_back(barrier);
@@ -737,6 +753,13 @@ const char* RenderGraph::getPassName(PassHandle handle) const {
     return m_passes[handle].name.c_str();
 }
 
+Image* RenderGraph::getImage(ResourceHandle handle) const {
+    if (handle >= m_resources.size()) return nullptr;
+    const auto& res = m_resources[handle];
+    if (res.ownership == ResourceOwnership::Imported) return nullptr;
+    return res.ownedImage.get();
+}
+
 VkImage RenderGraph::getImageHandle(ResourceHandle handle) const {
     if (handle >= m_resources.size()) return VK_NULL_HANDLE;
     const auto& res = m_resources[handle];
@@ -758,7 +781,7 @@ VkExtent2D RenderGraph::getImageExtent(ResourceHandle handle) const {
     const auto& res = m_resources[handle];
     if (res.ownership == ResourceOwnership::Imported) return {res.desc.width, res.desc.height};
     if (!res.ownedImage) return {};
-    return res.ownedImage->extent();
+    return res.ownedImage->extent2D();
 }
 
 VkFormat RenderGraph::getImageFormat(ResourceHandle handle) const {

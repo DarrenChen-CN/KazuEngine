@@ -1,0 +1,45 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D equirectMap;
+layout(set = 0, binding = 1, rgba16f) uniform image2DArray cubeMap;
+
+#define PI 3.14159265359
+
+vec3 cubeDir(int face, vec2 uv) {
+    vec2 p = uv * 2.0 - 1.0;
+    switch (face) {
+        case 0: return normalize(vec3( 1.0, -p.y, -p.x)); // +X
+        case 1: return normalize(vec3(-1.0, -p.y,  p.x)); // -X
+        case 2: return normalize(vec3( p.x,  1.0,  p.y)); // +Y
+        case 3: return normalize(vec3( p.x, -1.0, -p.y)); // -Y
+        case 4: return normalize(vec3( p.x, -p.y,  1.0)); // +Z
+        case 5: return normalize(vec3(-p.x, -p.y, -1.0)); // -Z
+    }
+    return vec3(0.0);
+}
+
+vec2 dirToEquirectUV(vec3 dir) {
+    float theta = acos(clamp(dir.y, -1.0, 1.0));
+    float phi = atan(dir.z, dir.x);
+    if (phi < 0.0) phi += 2.0 * PI;
+    return vec2(phi / (2.0 * PI), theta / PI);
+}
+
+void main() {
+    ivec3 gid = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 size = imageSize(cubeMap);
+
+    if (gid.x >= size.x || gid.y >= size.y || gid.z >= 6)
+        return;
+
+    vec2 uv = (vec2(gid.xy) + 0.5) / vec2(size.xy);
+    int face = gid.z;
+
+    vec3 dir = cubeDir(face, uv);
+    vec2 eqUV = dirToEquirectUV(dir);
+
+    vec3 color = texture(equirectMap, eqUV).rgb;
+    imageStore(cubeMap, gid, vec4(color, 1.0));
+}

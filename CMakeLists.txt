@@ -155,6 +155,11 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/shadowmap.frag
     ${SHADER_SOURCE_DIR}/lightvisualize.vert
     ${SHADER_SOURCE_DIR}/lightvisualize.frag
+    ${SHADER_SOURCE_DIR}/brdf_lut.comp
+    ${SHADER_SOURCE_DIR}/equirect_to_cube.comp
+    ${SHADER_SOURCE_DIR}/irradiance.comp
+    ${SHADER_SOURCE_DIR}/cubemap_tonemap.comp
+    ${SHADER_SOURCE_DIR}/prefilter_env.comp
 )
 
 foreach(SHADER ${SHADERS})

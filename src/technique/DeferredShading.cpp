@@ -38,9 +38,10 @@ void DeferredShading::onInit() {
     // Import swapchain as an external resource (handle is rebound per-frame)
     m_swapchainHandle = m_renderGraph->addImportedTexture(
         "Swapchain",
-        {m_rhi->extent().width, m_rhi->extent().height,
-         m_rhi->swapchainFormat(),
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
+        {.width = m_rhi->extent().width,
+         .height = m_rhi->extent().height,
+         .format = m_rhi->swapchainFormat(),
+         .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
         m_rhi->swapchainImage(0),      // placeholder, rebound each frame
         m_rhi->swapchainImageView(0)); // placeholder, rebound each frame
     std::vector<VkImageView> swapchainViews;
@@ -63,6 +64,8 @@ void DeferredShading::onInit() {
         m_gbufferPass->depthHandle(),
         m_gbufferPass->materialHandle(),
         m_shadowMapPass->shadowMapHandle());
+    m_lightingPass->setIBL(m_iblIrradiance, m_iblPrefilter, m_iblLut);
+    m_lightingPass->setEnvironment(m_environmentMap);
     m_lightingPass->declare(m_rhi, m_renderGraph.get());
 
     m_lightVisualizePass = std::make_unique<LightVisualizePass>();
@@ -216,6 +219,22 @@ void DeferredShading::setLightWidth(float width) {
 void DeferredShading::setUsePCSS(bool use) {
     m_lightingSettings.shadowMode = use ? ShadowMode_PCSS : ShadowMode_PCF;
     if (m_lightingPass) m_lightingPass->setUsePCSS(use);
+}
+
+void DeferredShading::setIBL(Texture* irradiance, Texture* prefilter, Texture* brdfLut) {
+    m_iblIrradiance = irradiance;
+    m_iblPrefilter = prefilter;
+    m_iblLut = brdfLut;
+    if (m_lightingPass) {
+        m_lightingPass->setIBL(irradiance, prefilter, brdfLut);
+    }
+}
+
+void DeferredShading::setEnvironment(Texture* environmentCube) {
+    m_environmentMap = environmentCube;
+    if (m_lightingPass) {
+        m_lightingPass->setEnvironment(environmentCube);
+    }
 }
 
 bool DeferredShading::onKey(int key, int scancode, int action, int mods) {

@@ -21,9 +21,11 @@ struct ShadowMapPush {
 } // anonymous namespace
 
 void ShadowMapPass::declare(RHI* rhi, RenderGraph* rg) {
-    m_shadowMapHandle = rg -> addTexture("ShadowMap", {
-        shadowMapSize, shadowMapSize, VK_FORMAT_D32_SFLOAT,
-        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
+    m_shadowMapHandle = rg->addTexture("ShadowMap", {
+        .width = shadowMapSize,
+        .height = shadowMapSize,
+        .format = VK_FORMAT_D32_SFLOAT,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT
     });
 
     m_passHandle = rg -> addPass("ShadowMap", [&](RenderGraph::PassBuilder& b){

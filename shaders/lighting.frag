@@ -11,6 +11,10 @@ layout(set = 0, binding = 1) uniform sampler2D normalSampler;
 layout(set = 0, binding = 2) uniform sampler2D depthSampler;
 layout(set = 0, binding = 3) uniform sampler2D shadowMapSampler;
 layout(set = 0, binding = 4) uniform sampler2D materialSampler;
+layout(set = 0, binding = 5) uniform samplerCube irradianceMap;
+layout(set = 0, binding = 6) uniform samplerCube prefilterMap;
+layout(set = 0, binding = 7) uniform sampler2D brdfLUT;
+layout(set = 0, binding = 8) uniform samplerCube environmentMap;
 
 layout(push_constant) uniform PushConstants {
     mat4 invViewProj;
@@ -25,6 +29,8 @@ layout(push_constant) uniform PushConstants {
     int shadowMode;
     int debugView;
     int lightingModel;
+    int iblEnabled;
+    int envEnabled;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -48,6 +54,12 @@ vec3 reconstructWorldPos(vec2 ndc, float depth) {
     vec4 clip = vec4(ndc, depth, 1.0);
     vec4 world = pc.invViewProj * clip;
     return world.xyz / world.w;
+}
+
+vec3 sampleEnvironmentBackground(vec2 ndc) {
+    vec4 worldFar = pc.invViewProj * vec4(ndc, 1.0, 1.0);
+    vec3 dir = normalize(worldFar.xyz / worldFar.w);
+    return texture(environmentMap, dir).rgb;
 }
 
 // ----------------------------------------------------------------------------
@@ -168,6 +180,10 @@ vec3 FresnelSchlick(float HdotV, vec3 F0) {
     return F0 + (vec3(1.0) - F0) * pow(clamp(1.0 - HdotV, 0.0, 1.0), 5.0);
 }
 
+vec3 FresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 + (max(vec3(1.0 - roughness), F0) - F0) * pow(1.0 - cosTheta, 5.0);
+}
+
 float GeometrySchlickGGX(float NdotX, float roughness) {
     float r = roughness + 1.0;
     float k = (r * r) / 8.0;
@@ -205,6 +221,26 @@ vec3 evaluatePBR(vec3 albedo, float metallic, float roughness,
     return (diffuse + specular) * radiance * NdotL;
 }
 
+vec3 evaluateIBL(vec3 albedo, float metallic, float roughness, vec3 N, vec3 V, float ao) {
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    vec3 F = FresnelSchlickRoughness(NdotV, F0, roughness);
+
+    vec3 kS = F;
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+
+    vec3 irradiance = texture(irradianceMap, N).rgb;
+    vec3 diffuse = irradiance * albedo;
+
+    vec3 R = reflect(-V, N);
+    float maxReflectionLod = float(textureQueryLevels(prefilterMap) - 1);
+    vec3 prefilteredColor = textureLod(prefilterMap, R, roughness * maxReflectionLod).rgb;
+    vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
+    vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
+
+    return (kD * diffuse + specular); // DEBUG: ignore AO
+}
+
 vec3 evaluateAmbientApprox(vec3 albedo, float metallic, float roughness, float ao) {
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     vec3 diffuseAmbient = albedo * (1.0 - metallic) * 0.04;
@@ -221,6 +257,13 @@ void main() {
     vec3 normalEncoded = texture(normalSampler, fragTexCoord).rgb;
     vec3 normal = normalize(normalEncoded * 2.0 - 1.0);
     float depth = texture(depthSampler, fragTexCoord).r;
+
+    // Background: no geometry written, draw environment cubemap
+    if (depth >= 1.0 && pc.envEnabled == 1) {
+        outColor = vec4(sampleEnvironmentBackground(fragNdc), 1.0);
+        return;
+    }
+
     vec3 material = texture(materialSampler, fragTexCoord).rgb;
     float metallic = clamp(material.r, 0.0, 1.0);
     float roughness = clamp(material.g, 0.04, 1.0);
@@ -257,9 +300,14 @@ void main() {
         direct = albedo * radiance * diff;
     }
 
-    vec3 ambient = (pc.lightingModel == 1)
-        ? evaluateAmbientApprox(albedo, metallic, roughness, ao)
-        : albedo * 0.03 * ao;
+    vec3 ambient;
+    if (pc.lightingModel == 1 && pc.iblEnabled == 1) {
+        ambient = evaluateIBL(albedo, metallic, roughness, normal, viewDir, ao);
+    } else if (pc.lightingModel == 1) {
+        ambient = evaluateAmbientApprox(albedo, metallic, roughness, ao);
+    } else {
+        ambient = albedo * 0.03 * ao;
+    }
     vec3 color = ambient + direct * (1.0 - shadow);
     outColor = vec4(color, 1.0);
 }

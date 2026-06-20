@@ -8,6 +8,7 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
+#include <imgui.h>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,10 @@ public:
     void endFrame(VkCommandBuffer cmd, uint32_t imageIndex);
 
     void drawPanel(const PanelDesc& desc);
+    void drawIBLDebug();
+    void setIBLDebugViews(VkSampler sampler, const std::vector<VkImageView>& views);
+    void setEnvironmentDebugViews(VkSampler sampler, const std::vector<VkImageView>& views);
+    void setPrefilterDebugViews(VkSampler sampler, const std::vector<VkImageView>& views, uint32_t mipLevels);
 
     // Input capture queries: use these to avoid forwarding mouse events
     // to the camera controller while interacting with ImGui widgets.
@@ -67,6 +72,16 @@ private:
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkRenderPass     m_renderPass     = VK_NULL_HANDLE;
     std::vector<VkFramebuffer> m_framebuffers;
+
+    std::vector<VkImageView> m_iblDebugViews;
+    std::vector<ImTextureID> m_iblDebugTextures;
+    std::vector<VkImageView> m_envDebugViews;
+    std::vector<ImTextureID> m_envDebugTextures;
+
+    std::vector<VkImageView> m_prefilterDebugViews;
+    std::vector<ImTextureID> m_prefilterDebugTextures;
+    uint32_t m_prefilterMipLevels = 1;
+    int m_prefilterSelectedMip = 0;
 };
 
 } // namespace kazu

@@ -16,6 +16,7 @@ namespace kazu {
 class RHI;
 class Scene;
 class Camera;
+class Texture;
 
 struct RenderFrameContext {
     VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -45,6 +46,18 @@ public:
         (void)action;
         (void)mods;
         return false;
+    }
+
+    // Optional IBL resources. Forwarded to the underlying passes in onInit().
+    virtual void setIBL(Texture* irradiance, Texture* prefilter, Texture* brdfLut) {
+        (void)irradiance;
+        (void)prefilter;
+        (void)brdfLut;
+    }
+
+    // Optional environment cubemap for background skybox.
+    virtual void setEnvironment(Texture* environmentCube) {
+        (void)environmentCube;
     }
 
 protected:

@@ -7,6 +7,7 @@
 
 #pragma once
 #include <vulkan/vulkan.h>
+#include <memory>
 #include "pass/Pass.h"
 #include "rendergraph/RenderGraph.h"
 #include "scene/RendererSettings.h"
@@ -14,6 +15,7 @@
 namespace kazu {
 
 class ShaderEffect;
+class Texture;
 
 class LightingPass : public Pass {
 public:
@@ -43,6 +45,10 @@ public:
                    RenderGraph::ResourceHandle depth,
                    RenderGraph::ResourceHandle material,
                    RenderGraph::ResourceHandle shadowMap = RenderGraph::InvalidResource);
+
+    void setIBL(Texture* irradiance, Texture* prefilter, Texture* brdfLut);
+    void setEnvironment(Texture* environmentCube);
+
     RenderGraph::ResourceHandle sceneColorHandle() const { return m_sceneColorHandle; }
 
 private:
@@ -64,6 +70,17 @@ private:
     VkDescriptorSet  m_descriptorSet  = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
     VkSampler        m_sampler        = VK_NULL_HANDLE;
+
+    Texture* m_irradianceMap = nullptr;
+    Texture* m_prefilterMap  = nullptr;
+    Texture* m_brdfLut       = nullptr;
+    Texture* m_environmentMap = nullptr;
+    bool     m_iblEnabled    = false;
+    bool     m_envEnabled    = false;
+    std::unique_ptr<Texture> m_dummyIrradiance;
+    std::unique_ptr<Texture> m_dummyPrefilter;
+    std::unique_ptr<Texture> m_dummyLut;
+    std::unique_ptr<Texture> m_dummyEnv;
 
     LightingSettings m_settings;
 };

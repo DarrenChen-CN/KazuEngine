@@ -99,6 +99,16 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
         }
     }
 
+    // Parse environment (IBL source)
+    auto environment = j.value("environment", json::object());
+    if (!environment.empty()) {
+        m_rendererSettings.environment.enabled = environment.value("enabled", false);
+        m_rendererSettings.environment.hdrPath = environment.value("hdr", std::string{});
+        if (m_rendererSettings.environment.enabled) {
+            m_rendererSettings.lighting.enableIBL = true;
+        }
+    }
+
     // Parse light
     auto light = j.value("light", json::object());
     auto lpos = light.value("position", std::vector<float>{2.0f, 3.0f, 2.0f});

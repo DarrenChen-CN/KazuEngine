@@ -39,8 +39,11 @@ public:
     struct TextureDesc {
         uint32_t width  = 0;
         uint32_t height = 0;
+        uint32_t mipLevels = 1;
+        uint32_t arrayLayers = 1;
         VkFormat format = VK_FORMAT_UNDEFINED;
         VkImageUsageFlags usage = 0;
+        VkImageCreateFlags flags = 0; // e.g. VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT
     };
 
     ResourceHandle addTexture(const char* name, const TextureDesc& desc);
@@ -92,11 +95,19 @@ public:
         void writeDepth(ResourceHandle resource) {
             writeDepth_ = resource;
         }
+        void readStorageImage(ResourceHandle resource) {
+            readStorageImages.push_back(resource);
+        }
+        void writeStorageImage(ResourceHandle resource) {
+            writeStorageImages.push_back(resource);
+        }
 
         std::function<void(const PassExecuteContext&)> execute;
         std::vector<ResourceHandle> reads;
         std::vector<std::pair<uint32_t, ResourceHandle>> writeColors;
         ResourceHandle writeDepth_ = InvalidResource;
+        std::vector<ResourceHandle> readStorageImages;
+        std::vector<ResourceHandle> writeStorageImages;
     };
 
     using PassSetupFn = std::function<void(PassBuilder&)>;
@@ -124,6 +135,7 @@ public:
     void        dumpDebugInfo() const;
 
     // Resource queries (valid after compile())
+    Image*      getImage(ResourceHandle handle) const;
     VkImage     getImageHandle(ResourceHandle handle) const;
     VkImageView getImageView(ResourceHandle handle) const;
     VkExtent2D  getImageExtent(ResourceHandle handle) const;

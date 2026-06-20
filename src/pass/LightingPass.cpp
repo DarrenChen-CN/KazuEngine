@@ -5,7 +5,10 @@
 #include "pass/LightingPass.h"
 #include "core/Utils.h"
 #include "core/Path.h"
+#include "core/Image.h"
+#include "core/CommandBuffer.h"
 #include "rhi/RHI.h"
+#include "rhi/Texture.h"
 #include "rhi/ShaderEffect.h"
 #include "rhi/Camera.h"
 #include "scene/Scene.h"
@@ -32,7 +35,74 @@ struct LightingPush {
     int       shadowMode;
     int       debugView;
     int       lightingModel;
+    int       iblEnabled;
+    int       envEnabled;
 };
+
+std::unique_ptr<Texture> createBlackTextureCube(Context& ctx, VkFormat format) {
+    ImageDesc desc{};
+    desc.type = VK_IMAGE_TYPE_2D;
+    desc.extent = {1, 1, 1};
+    desc.mipLevels = 1;
+    desc.arrayLayers = 6;
+    desc.format = format;
+    desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    desc.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+
+    auto image = std::make_unique<Image>(ctx, desc);
+
+    CommandBuffer cmd(ctx, ctx.transientPool());
+    cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    image->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkClearColorValue clear{};
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6};
+    vkCmdClearColorImage(cmd.handle(), image->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    image->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    cmd.end();
+    cmd.submit(ctx.graphicsQueue());
+    vkQueueWaitIdle(ctx.graphicsQueue());
+
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    return std::make_unique<Texture>(ctx, std::move(image), samplerInfo);
+}
+
+std::unique_ptr<Texture> createBlackTexture2D(Context& ctx, VkFormat format) {
+    ImageDesc desc{};
+    desc.type = VK_IMAGE_TYPE_2D;
+    desc.extent = {1, 1, 1};
+    desc.mipLevels = 1;
+    desc.arrayLayers = 1;
+    desc.format = format;
+    desc.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    auto image = std::make_unique<Image>(ctx, desc);
+
+    CommandBuffer cmd(ctx, ctx.transientPool());
+    cmd.begin(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    image->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    VkClearColorValue clear{};
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(cmd.handle(), image->handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &range);
+    image->transitionLayout(cmd.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    cmd.end();
+    cmd.submit(ctx.graphicsQueue());
+    vkQueueWaitIdle(ctx.graphicsQueue());
+
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    return std::make_unique<Texture>(ctx, std::move(image), samplerInfo);
+}
 
 } // anonymous namespace
 
@@ -45,8 +115,7 @@ LightingPass::~LightingPass() {
 
     if (m_descriptorPool)
         vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);
-    if (m_descriptorSetLayout)
-        vkDestroyDescriptorSetLayout(device, m_descriptorSetLayout, nullptr);
+    // m_descriptorSetLayout is borrowed from ShaderEffect's cache; do not destroy.
     if (m_sampler)
         vkDestroySampler(device, m_sampler, nullptr);
 }
@@ -63,10 +132,24 @@ void LightingPass::setInputs(RenderGraph::ResourceHandle albedo,
     m_shadowMapHandle = shadowMap;
 }
 
+void LightingPass::setIBL(Texture* irradiance, Texture* prefilter, Texture* brdfLut) {
+    m_irradianceMap = irradiance;
+    m_prefilterMap = prefilter;
+    m_brdfLut = brdfLut;
+    m_iblEnabled = (irradiance != nullptr && prefilter != nullptr && brdfLut != nullptr);
+}
+
+void LightingPass::setEnvironment(Texture* environmentCube) {
+    m_environmentMap = environmentCube;
+    m_envEnabled = (environmentCube != nullptr);
+}
+
 void LightingPass::declare(RHI* rhi, RenderGraph* rg) {
     m_sceneColorHandle = rg->addTexture("SceneColorHDR",
-        {rhi->extent().width, rhi->extent().height, VK_FORMAT_R16G16B16A16_SFLOAT,
-         VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+        {.width = rhi->extent().width,
+         .height = rhi->extent().height,
+         .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+         .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
 
     LightingPass* self = this;
     m_passHandle = rg->addPass("Lighting", [&](RenderGraph::PassBuilder& b) {
@@ -115,42 +198,30 @@ void LightingPass::create(const PassCreateContext& ctx) {
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = VK_FILTER_LINEAR;
         samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
         samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.maxLod = 32.0f;
         VK_CHECK(vkCreateSampler(m_rhi->ctx().device(), &samplerInfo, nullptr, &m_sampler));
 
-        VkDescriptorSetLayoutBinding bindings[5]{};
-        bindings[0].binding = 0;
-        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[0].descriptorCount = 1;
-        bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        bindings[1].binding = 1;
-        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[1].descriptorCount = 1;
-        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        bindings[2].binding = 2;
-        bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[2].descriptorCount = 1;
-        bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        bindings[3].binding = 3;
-        bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[3].descriptorCount = 1;
-        bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        bindings[4].binding = 4;
-        bindings[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[4].descriptorCount = 1;
-        bindings[4].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        // Use real IBL textures if provided; otherwise create tiny black placeholders
+        // so the descriptor set is still valid (they won't be sampled when IBL is off).
+        if (!m_irradianceMap) m_dummyIrradiance = createBlackTextureCube(m_rhi->ctx(), VK_FORMAT_R16G16B16A16_SFLOAT);
+        if (!m_prefilterMap)  m_dummyPrefilter  = createBlackTextureCube(m_rhi->ctx(), VK_FORMAT_R16G16B16A16_SFLOAT);
+        if (!m_brdfLut)       m_dummyLut        = createBlackTexture2D(m_rhi->ctx(), VK_FORMAT_R8G8B8A8_UNORM);
+        if (!m_environmentMap) m_dummyEnv       = createBlackTextureCube(m_rhi->ctx(), VK_FORMAT_R16G16B16A16_SFLOAT);
 
-        VkDescriptorSetLayoutCreateInfo dslInfo{};
-        dslInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        dslInfo.bindingCount = 5;
-        dslInfo.pBindings = bindings;
-        VK_CHECK(vkCreateDescriptorSetLayout(m_rhi->ctx().device(), &dslInfo, nullptr, &m_descriptorSetLayout));
+        Texture* irradianceTex = m_irradianceMap ? m_irradianceMap : m_dummyIrradiance.get();
+        Texture* prefilterTex  = m_prefilterMap  ? m_prefilterMap  : m_dummyPrefilter.get();
+        Texture* lutTex        = m_brdfLut       ? m_brdfLut       : m_dummyLut.get();
+        Texture* envTex        = m_environmentMap ? m_environmentMap : m_dummyEnv.get();
+
+        m_descriptorSetLayout = m_effect->descriptorSetLayout();
 
         VkDescriptorPoolSize poolSize{};
         poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSize.descriptorCount = 5;
+        poolSize.descriptorCount = 9;
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.maxSets = 1;
@@ -170,7 +241,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
             ? m_renderGraph->getImageView(m_shadowMapHandle)
             : depthView;
 
-        VkDescriptorImageInfo imageInfos[5]{};
+        VkDescriptorImageInfo imageInfos[9]{};
         imageInfos[0].sampler = m_sampler;
         imageInfos[0].imageView = albedoView;
         imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -186,9 +257,21 @@ void LightingPass::create(const PassCreateContext& ctx) {
         imageInfos[4].sampler = m_sampler;
         imageInfos[4].imageView = materialView;
         imageInfos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[5].sampler = m_sampler;
+        imageInfos[5].imageView = irradianceTex->view();
+        imageInfos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[6].sampler = m_sampler;
+        imageInfos[6].imageView = prefilterTex->view();
+        imageInfos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[7].sampler = m_sampler;
+        imageInfos[7].imageView = lutTex->view();
+        imageInfos[7].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfos[8].sampler = m_sampler;
+        imageInfos[8].imageView = envTex->view();
+        imageInfos[8].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-        VkWriteDescriptorSet writes[5]{};
-        for (int i = 0; i < 5; ++i) {
+        VkWriteDescriptorSet writes[9]{};
+        for (int i = 0; i < 9; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = m_descriptorSet;
             writes[i].dstBinding = i;
@@ -197,7 +280,7 @@ void LightingPass::create(const PassCreateContext& ctx) {
             writes[i].descriptorCount = 1;
             writes[i].pImageInfo = &imageInfos[i];
         }
-        vkUpdateDescriptorSets(m_rhi->ctx().device(), 5, writes, 0, nullptr);
+        vkUpdateDescriptorSets(m_rhi->ctx().device(), 9, writes, 0, nullptr);
     }
 }
 
@@ -256,6 +339,8 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
     push.shadowMode = m_settings.shadowMode;
     push.debugView = m_settings.debugView;
     push.lightingModel = m_settings.lightingModel;
+    push.iblEnabled = m_iblEnabled ? 1 : 0;
+    push.envEnabled = m_envEnabled ? 1 : 0;
     vkCmdPushConstants(cmd, m_effect->pipelineLayout(),
         VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(LightingPush), &push);
