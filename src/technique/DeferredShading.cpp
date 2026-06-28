@@ -13,6 +13,8 @@
 #include "pass/TonemapPass.h"
 #include "pass/FXAAPass.h"
 #include "pass/TAAPass.h"
+#include "pass/SSRPass.h"
+#include "pass/HiZPass.h"
 #include "pass/BloomPass.h"
 #include "app/AppUI.h"
 #include "core/Utils.h"
@@ -119,6 +121,19 @@ void DeferredShading::onInit() {
     m_lightVisualizePass->setInput(m_lightingPass->sceneColorHandle());
     m_lightVisualizePass->declare(m_rhi, m_renderGraph.get());
 
+    m_hizPass = std::make_unique<HiZPass>();
+    m_hizPass->setInputDepth(m_gbufferPass->depthHandle());
+    m_hizPass->declare(m_rhi, m_renderGraph.get());
+
+    m_ssrPass = std::make_unique<SSRPass>();
+    m_ssrPass->setInputs(
+        m_lightingPass->sceneColorHandle(),
+        m_gbufferPass->depthHandle(),
+        m_gbufferPass->normalHandle(),
+        m_gbufferPass->materialHandle(),
+        m_hizPass->hizHandle());
+    m_ssrPass->declare(m_rhi, m_renderGraph.get());
+
     // TAA history buffers (persistent, ping-ponged across frames)
     {
         VkExtent2D extent = m_rhi->extent();
@@ -181,7 +196,7 @@ void DeferredShading::onInit() {
     }
 
     m_taaPass = std::make_unique<TAAPass>();
-    m_taaPass->setInputHDR(m_lightingPass->sceneColorHandle());
+    m_taaPass->setInputHDR(m_ssrPass->outputHandle());
     m_taaPass->setInputDepth(m_gbufferPass->depthHandle());
     m_taaPass->setHistoryRead(m_taaHistoryHandles[0]);
     m_taaPass->setHistoryWrite(m_taaHistoryHandles[1]);
@@ -228,6 +243,8 @@ void DeferredShading::onInit() {
     m_ssaoBlurPass->create(passCtx);
     m_lightingPass->create(passCtx);
     m_lightVisualizePass->create(passCtx);
+    m_hizPass->create(passCtx);
+    m_ssrPass->create(passCtx);
     m_taaPass->create(passCtx);
     m_bloomPass->create(passCtx);
     m_tonemapPass->create(passCtx);
@@ -269,6 +286,12 @@ void DeferredShading::render(const RenderFrameContext& frame) {
 
     if (m_fxaaPass) {
         m_fxaaPass->setEnabled(m_lightingSettings.enableFXAA);
+    }
+
+    if (m_ssrPass) {
+        m_ssrPass->setEnabled(m_ssrEnabled);
+        m_ssrPass->setDisplayMode(m_ssrDisplayMode);
+        m_ssrPass->setTraceMode(m_ssrTraceMode);
     }
 
     // ---- TAA jitter / matrix setup ----
@@ -416,6 +439,32 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     fxaaItem.label = "Enable FXAA";
     fxaaItem.b.value = &m_lightingSettings.enableFXAA;
     desc.items.push_back(fxaaItem);
+
+    desc.items.push_back({PanelItem::Separator, "SSR", {}});
+
+    PanelItem ssrEnableItem{};
+    ssrEnableItem.type = PanelItem::Bool;
+    ssrEnableItem.label = "Enable SSR";
+    ssrEnableItem.b.value = &m_ssrEnabled;
+    desc.items.push_back(ssrEnableItem);
+
+    static const char* ssrDebugModes[] = {"Composite", "Reflection Only", "Hit Mask"};
+    PanelItem ssrDebugItem{};
+    ssrDebugItem.type = PanelItem::Enum;
+    ssrDebugItem.label = "SSR Debug";
+    ssrDebugItem.e.value = &m_ssrDisplayMode;
+    ssrDebugItem.e.names = ssrDebugModes;
+    ssrDebugItem.e.count = 3;
+    desc.items.push_back(ssrDebugItem);
+
+    static const char* ssrTraceModes[] = {"Basic", "Binary", "Hi-Z"};
+    PanelItem ssrTraceItem{};
+    ssrTraceItem.type = PanelItem::Enum;
+    ssrTraceItem.label = "SSR Trace Mode";
+    ssrTraceItem.e.value = &m_ssrTraceMode;
+    ssrTraceItem.e.names = ssrTraceModes;
+    ssrTraceItem.e.count = 3;
+    desc.items.push_back(ssrTraceItem);
 
     PanelItem taaItem{};
     taaItem.type = PanelItem::Bool;

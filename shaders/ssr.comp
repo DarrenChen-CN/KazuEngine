@@ -1,0 +1,241 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outSceneColor;
+layout(set = 0, binding = 1) uniform sampler2D sceneColorSampler;
+layout(set = 0, binding = 2) uniform sampler2D depthSampler;
+layout(set = 0, binding = 3) uniform sampler2D normalSampler;
+layout(set = 0, binding = 4) uniform sampler2D materialSampler;
+layout(set = 0, binding = 5) uniform sampler2D hizSampler;
+
+layout(push_constant) uniform PushConstants {
+    mat4  viewProj;
+    mat4  invViewProj;
+    vec4  cameraPos;
+    vec4  params;      // x = maxSteps, y = stepSize, z = thickness, w = roughnessScale
+    vec2  screenSize;
+    int   displayMode;
+    int   traceMode;   // 0 = basic fixed-step, 1 = fixed-step + binary, 2 = Hi-Z
+    int   hizMaxMip;
+    int   _pad;
+} pc;
+
+vec3 reconstructWorldPos(vec2 ndc, float depth) {
+    vec4 clip = vec4(ndc, depth, 1.0);
+    vec4 world = pc.invViewProj * clip;
+    return world.xyz / world.w;
+}
+
+// Returns true and writes reflectedColor/hitMask if a hit is found.
+bool traceRayBasic(vec3 origin, vec3 dir, out vec3 reflectedColor, out float hitMask) {
+    reflectedColor = vec3(0.0);
+    hitMask = 0.0;
+
+    float bias = pc.params.y * 0.5;
+    vec3 rayPos = origin + dir * bias;
+    float stepSize = pc.params.y;
+    int maxSteps = int(pc.params.x);
+
+    for (int i = 0; i < maxSteps; ++i) {
+        rayPos += dir * stepSize;
+
+        vec4 clip = pc.viewProj * vec4(rayPos, 1.0);
+        vec3 ndcRay = clip.xyz / clip.w;
+        vec2 rayUV = ndcRay.xy * 0.5 + 0.5;
+
+        if (any(lessThan(rayUV, vec2(0.0))) || any(greaterThan(rayUV, vec2(1.0))))
+            return false;
+
+        float sceneDepth = texture(depthSampler, rayUV).r;
+        if (ndcRay.z > sceneDepth) {
+            reflectedColor = texture(sceneColorSampler, rayUV).rgb;
+            hitMask = 1.0;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool traceRayBinary(vec3 origin, vec3 dir, out vec3 reflectedColor, out float hitMask) {
+    reflectedColor = vec3(0.0);
+    hitMask = 0.0;
+
+    float bias = pc.params.y * 0.5;
+    float stepSize = pc.params.y;
+    int maxSteps = int(pc.params.x);
+
+    vec3 prevPos = origin + dir * bias;
+    vec3 currPos = prevPos;
+
+    for (int i = 0; i < maxSteps; ++i) {
+        prevPos = currPos;
+        currPos += dir * stepSize;
+
+        vec4 clip = pc.viewProj * vec4(currPos, 1.0);
+        vec3 ndcRay = clip.xyz / clip.w;
+        vec2 rayUV = ndcRay.xy * 0.5 + 0.5;
+
+        if (any(lessThan(rayUV, vec2(0.0))) || any(greaterThan(rayUV, vec2(1.0))))
+            return false;
+
+        float sceneDepth = texture(depthSampler, rayUV).r;
+        if (ndcRay.z > sceneDepth) {
+            // Binary search between prevPos (in front) and currPos (behind).
+            vec3 p0 = prevPos;
+            vec3 p1 = currPos;
+            for (int j = 0; j < 8; ++j) {
+                vec3 mid = (p0 + p1) * 0.5;
+                vec4 midClip = pc.viewProj * vec4(mid, 1.0);
+                vec3 midNdc = midClip.xyz / midClip.w;
+                vec2 midUV = midNdc.xy * 0.5 + 0.5;
+                float midDepth = texture(depthSampler, midUV).r;
+                if (midNdc.z > midDepth) {
+                    p1 = mid;
+                } else {
+                    p0 = mid;
+                }
+            }
+
+            vec3 finalPos = (p0 + p1) * 0.5;
+            vec4 finalClip = pc.viewProj * vec4(finalPos, 1.0);
+            vec2 finalUV = finalClip.xy / finalClip.w * 0.5 + 0.5;
+            reflectedColor = texture(sceneColorSampler, finalUV).rgb;
+            hitMask = 1.0;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool traceRayHiZ(vec3 origin, vec3 dir, out vec3 reflectedColor, out float hitMask) {
+    reflectedColor = vec3(0.0);
+    hitMask = 0.0;
+
+    float baseStep = pc.params.y;
+    float step = baseStep;
+    int level = 0;
+    int maxMip = pc.hizMaxMip;
+    int maxSteps = int(pc.params.x);
+
+    float bias = baseStep * 0.5;
+    vec3 prevPos = origin + dir * bias;
+    vec3 currPos = prevPos;
+
+    for (int i = 0; i < maxSteps; ++i) {
+        prevPos = currPos;
+        currPos += dir * step;
+
+        vec4 clip = pc.viewProj * vec4(currPos, 1.0);
+        vec3 ndcRay = clip.xyz / clip.w;
+        vec2 rayUV = ndcRay.xy * 0.5 + 0.5;
+
+        if (any(lessThan(rayUV, vec2(0.0))) || any(greaterThan(rayUV, vec2(1.0)))
+            || ndcRay.z < 0.0 || ndcRay.z > 1.0)
+            return false;
+
+        float sceneDepth = textureLod(hizSampler, rayUV, level).r;
+
+        if (ndcRay.z > sceneDepth) {
+            // Potential hit at this mip level.
+            if (level == 0) {
+                // Binary search to refine the intersection.
+                vec3 p0 = prevPos;
+                vec3 p1 = currPos;
+                for (int j = 0; j < 8; ++j) {
+                    vec3 mid = (p0 + p1) * 0.5;
+                    vec4 midClip = pc.viewProj * vec4(mid, 1.0);
+                    vec3 midNdc = midClip.xyz / midClip.w;
+                    vec2 midUV = midNdc.xy * 0.5 + 0.5;
+                    float midDepth = textureLod(hizSampler, midUV, 0).r;
+                    if (midNdc.z > midDepth) {
+                        p1 = mid;
+                    } else {
+                        p0 = mid;
+                    }
+                }
+
+                vec3 finalPos = (p0 + p1) * 0.5;
+                vec4 finalClip = pc.viewProj * vec4(finalPos, 1.0);
+                vec2 finalUV = finalClip.xy / finalClip.w * 0.5 + 0.5;
+                reflectedColor = texture(sceneColorSampler, finalUV).rgb;
+                hitMask = 1.0;
+                return true;
+            }
+
+            // Refine by going down one mip level and stepping back.
+            level--;
+            currPos = prevPos;
+            step *= 0.5;
+        } else {
+            // No intersection: advance, and move to a coarser mip if one step
+            // covers more than two texels at the current level.
+            vec4 nextClip = pc.viewProj * vec4(currPos + dir * step, 1.0);
+            vec2 nextUV = nextClip.xy / nextClip.w * 0.5 + 0.5;
+            float pixelDist = length((nextUV - rayUV) * pc.screenSize);
+            float texelSize = float(1 << level);
+
+            if (pixelDist > texelSize * 2.0 && level < maxMip) {
+                level++;
+                step *= 2.0;
+            }
+        }
+    }
+    return false;
+}
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outSceneColor);
+    if (texel.x >= size.x || texel.y >= size.y) return;
+
+    vec2 uv = (vec2(texel) + 0.5) / vec2(size);
+    vec2 ndc = uv * 2.0 - 1.0;
+
+    vec3 sceneColor = texture(sceneColorSampler, uv).rgb;
+    float depth = texture(depthSampler, uv).r;
+
+    // Background / sky: no reflection.
+    if (depth >= 1.0) {
+        imageStore(outSceneColor, texel, vec4(sceneColor, 1.0));
+        return;
+    }
+
+    vec3 worldPos = reconstructWorldPos(ndc, depth);
+    vec3 normal = normalize(texture(normalSampler, uv).rgb * 2.0 - 1.0);
+
+    vec4 material = texture(materialSampler, uv);
+    float metallic = material.r;
+    float roughness = material.g;
+
+    vec3 V = normalize(pc.cameraPos.xyz - worldPos);
+    vec3 R = reflect(-V, normal);
+
+    float cosTheta = max(dot(normal, V), 0.0);
+    float fresnel = pow(1.0 - cosTheta, 5.0);
+    float specularWeight = metallic * (1.0 - roughness) * (0.04 + 0.96 * fresnel);
+
+    vec3 reflectedColor = vec3(0.0);
+    float hitMask = 0.0;
+
+    if (pc.traceMode == 0) {
+        traceRayBasic(worldPos, R, reflectedColor, hitMask);
+    } else if (pc.traceMode == 1) {
+        traceRayBinary(worldPos, R, reflectedColor, hitMask);
+    } else {
+        traceRayHiZ(worldPos, R, reflectedColor, hitMask);
+    }
+
+    vec3 outputColor = sceneColor;
+    if (hitMask > 0.0) {
+        outputColor = mix(sceneColor, reflectedColor, specularWeight * hitMask);
+    }
+
+    if (pc.displayMode == 1) {
+        outputColor = reflectedColor * hitMask;
+    } else if (pc.displayMode == 2) {
+        outputColor = vec3(hitMask);
+    }
+
+    imageStore(outSceneColor, texel, vec4(outputColor, 1.0));
+}

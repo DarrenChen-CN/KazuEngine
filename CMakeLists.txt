@@ -165,6 +165,8 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/bloom_upsample.comp
     ${SHADER_SOURCE_DIR}/ssao.comp
     ${SHADER_SOURCE_DIR}/ssao_blur.comp
+    ${SHADER_SOURCE_DIR}/hiz_build.comp
+    ${SHADER_SOURCE_DIR}/ssr.comp
     ${SHADER_SOURCE_DIR}/fxaa.comp
     ${SHADER_SOURCE_DIR}/taa.comp
 )

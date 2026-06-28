@@ -29,6 +29,8 @@ class SSAOBlurPass;
 class Texture;
 class TonemapPass;
 class FXAAPass;
+class HiZPass;
+class SSRPass;
 class TAAPass;
 class BloomPass;
 class Image;
@@ -82,6 +84,8 @@ private:
     std::unique_ptr<SSAOPass>     m_ssaoPass;
     std::unique_ptr<SSAOBlurPass> m_ssaoBlurPass;
     std::unique_ptr<TonemapPass>  m_tonemapPass;
+    std::unique_ptr<HiZPass>      m_hizPass;
+    std::unique_ptr<SSRPass>      m_ssrPass;
     std::unique_ptr<TAAPass>      m_taaPass;
     std::unique_ptr<BloomPass>    m_bloomPass;
     std::unique_ptr<FXAAPass>     m_fxaaPass;
@@ -99,6 +103,10 @@ private:
 
     RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;
     bool m_lightingSettingsInitialized = false;
+
+    bool m_ssrEnabled = true;
+    int  m_ssrDisplayMode = 0; // 0 = composite, 1 = reflection only, 2 = hit mask
+    int  m_ssrTraceMode = 1;   // 0 = basic, 1 = binary, 2 = Hi-Z
 
     Texture* m_iblIrradiance = nullptr;
     Texture* m_iblPrefilter  = nullptr;

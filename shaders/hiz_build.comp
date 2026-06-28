@@ -1,0 +1,30 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D srcDepth;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D dstDepth;
+
+void main() {
+    ivec2 dstCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 dstSize = imageSize(dstDepth);
+    if (dstCoord.x >= dstSize.x || dstCoord.y >= dstSize.y) return;
+
+    ivec2 srcCoord = dstCoord * 2;
+    ivec2 srcSize = dstSize * 2;
+
+    // Clamp sample coordinates to the source mip's valid texel centers.
+    ivec2 c0 = clamp(srcCoord, ivec2(0), srcSize - ivec2(1));
+    ivec2 c1 = clamp(srcCoord + ivec2(1, 0), ivec2(0), srcSize - ivec2(1));
+    ivec2 c2 = clamp(srcCoord + ivec2(0, 1), ivec2(0), srcSize - ivec2(1));
+    ivec2 c3 = clamp(srcCoord + ivec2(1, 1), ivec2(0), srcSize - ivec2(1));
+
+    // Use nearest sampling with explicit integer coordinates converted to UVs.
+    vec2 invSrcSize = 1.0 / vec2(srcSize);
+    float d0 = texelFetch(srcDepth, c0, 0).r;
+    float d1 = texelFetch(srcDepth, c1, 0).r;
+    float d2 = texelFetch(srcDepth, c2, 0).r;
+    float d3 = texelFetch(srcDepth, c3, 0).r;
+
+    imageStore(dstDepth, dstCoord, vec4(min(min(d0, d1), min(d2, d3))));
+}
