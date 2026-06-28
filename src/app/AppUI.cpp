@@ -106,7 +106,7 @@ bool AppUI::wantsKeyboardInput() {
 }
 
 void AppUI::drawPanel(const PanelDesc& desc) {
-    ImGui::SetNextWindowSize(ImVec2(420, 280), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(420, 380), ImGuiCond_Always);
     ImGui::Begin(desc.name.c_str(), nullptr, ImGuiWindowFlags_NoResize);
     for (const auto& item : desc.items) {
         switch (item.type) {
@@ -126,6 +126,9 @@ void AppUI::drawPanel(const PanelDesc& desc) {
                 break;
             case PanelItem::Separator:
                 ImGui::Separator();
+                break;
+            case PanelItem::Label:
+                ImGui::Text("%s", item.label.c_str());
                 break;
         }
     }

@@ -298,7 +298,12 @@ void Context::createLogicalDevice() {
 
     VkPhysicalDeviceFeatures deviceFeatures{};
 
+    VkPhysicalDeviceHostQueryResetFeatures hostQueryResetFeatures{};
+    hostQueryResetFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_QUERY_RESET_FEATURES;
+    hostQueryResetFeatures.hostQueryReset = VK_TRUE;
+
     VkDeviceCreateInfo createInfo{};
+    createInfo.pNext = &hostQueryResetFeatures;
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
     createInfo.pQueueCreateInfos = queueCreateInfos.data();

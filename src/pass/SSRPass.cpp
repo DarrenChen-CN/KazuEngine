@@ -12,6 +12,7 @@
 #include "rendergraph/RenderGraph.h"
 #include <glm/glm.hpp>
 #include <array>
+#include <cstring>
 
 namespace kazu {
 
@@ -26,7 +27,7 @@ struct SSRPush {
     int32_t   displayMode;
     int32_t   traceMode;   // 0 = basic, 1 = binary, 2 = Hi-Z
     int32_t   hizMaxMip;
-    int32_t   _pad;
+    int32_t   enabled;     // 0 = bypass SSR, 1 = run SSR
 };
 
 } // anonymous namespace
@@ -37,6 +38,9 @@ SSRPass::~SSRPass() {
     if (!m_rhi) return;
     VkDevice device = m_rhi->ctx().device();
     vkDeviceWaitIdle(device);
+
+    m_timer.reset();
+    for (auto& b : m_stepBuffers) b.reset();
 
     if (m_descriptorPool)
         vkDestroyDescriptorPool(device, m_descriptorPool, nullptr);
@@ -87,8 +91,22 @@ void SSRPass::create(const PassCreateContext& ctx) {
     m_rhi = ctx.rhi;
     m_renderGraph = ctx.renderGraph;
 
+    m_timer = std::make_unique<GPUTimer>(
+        m_rhi->ctx().device(),
+        m_rhi->ctx().physicalDevice(),
+        kRingSize);
+
+    VkDeviceSize statsSize = sizeof(uint32_t) * 2;
+    for (uint32_t i = 0; i < kRingSize; ++i) {
+        m_stepBuffers[i] = std::make_unique<Buffer>(m_rhi->ctx(),
+            statsSize,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        std::memset(m_stepBuffers[i]->mapped(), 0, static_cast<size_t>(statsSize));
+    }
+
     createPipeline();
-    createDescriptorSet();
+    createDescriptorSets();
 }
 
 void SSRPass::createPipeline() {
@@ -111,7 +129,8 @@ void SSRPass::createPipeline() {
     // Binding 3 = normal sampler
     // Binding 4 = material sampler
     // Binding 5 = Hi-Z pyramid sampler
-    std::vector<VkDescriptorSetLayoutBinding> bindings(6);
+    // Binding 6 = per-pixel step statistics (storage buffer)
+    std::vector<VkDescriptorSetLayoutBinding> bindings(7);
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -122,6 +141,10 @@ void SSRPass::createPipeline() {
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
+    bindings[6].binding = 6;
+    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[6].descriptorCount = 1;
+    bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     m_descriptorSetLayout = m_rhi->dslCache().getOrCreate(bindings);
 
@@ -152,28 +175,31 @@ void SSRPass::createPipeline() {
     VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &m_pipeline));
 }
 
-void SSRPass::createDescriptorSet() {
+void SSRPass::createDescriptorSets() {
     VkDevice device = m_rhi->ctx().device();
 
-    VkDescriptorPoolSize poolSizes[2]{};
+    VkDescriptorPoolSize poolSizes[3]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    poolSizes[0].descriptorCount = 1;
+    poolSizes[0].descriptorCount = kRingSize;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = 5;
+    poolSizes[1].descriptorCount = 5 * kRingSize;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[2].descriptorCount = kRingSize;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = 2;
+    poolInfo.maxSets = kRingSize;
+    poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;
     VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_descriptorPool));
 
+    std::vector<VkDescriptorSetLayout> layouts(kRingSize, m_descriptorSetLayout);
     VkDescriptorSetAllocateInfo allocInfo{};
     allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool = m_descriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &m_descriptorSetLayout;
-    VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &m_descriptorSet));
+    allocInfo.descriptorSetCount = kRingSize;
+    allocInfo.pSetLayouts = layouts.data();
+    VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, m_descriptorSets.data()));
 
     VkImageView outputView     = m_renderGraph->getImageView(m_outputHandle);
     VkImageView sceneColorView = m_renderGraph->getImageView(m_sceneColorHandle);
@@ -209,28 +235,81 @@ void SSRPass::createDescriptorSet() {
     infos[5].imageView = hizView;
     infos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    std::array<VkWriteDescriptorSet, 6> writes{};
-    for (uint32_t i = 0; i < 6; ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = m_descriptorSet;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
-        writes[i].pImageInfo = &infos[i];
-    }
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    for (uint32_t i = 1; i < 6; ++i) {
-        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    }
+    for (uint32_t slot = 0; slot < kRingSize; ++slot) {
+        VkDescriptorBufferInfo stepBufferInfo{};
+        stepBufferInfo.buffer = m_stepBuffers[slot]->handle();
+        stepBufferInfo.offset = 0;
+        stepBufferInfo.range = VK_WHOLE_SIZE;
 
-    vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        std::array<VkWriteDescriptorSet, 7> writes{};
+        for (uint32_t i = 0; i < 6; ++i) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstSet = m_descriptorSets[slot];
+            writes[i].dstBinding = i;
+            writes[i].descriptorCount = 1;
+            writes[i].pImageInfo = &infos[i];
+        }
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        for (uint32_t i = 1; i < 6; ++i) {
+            writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        }
+
+        writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[6].dstSet = m_descriptorSets[slot];
+        writes[6].dstBinding = 6;
+        writes[6].descriptorCount = 1;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[6].pBufferInfo = &stepBufferInfo;
+
+        vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
 }
 
 void SSRPass::execute(const PassExecuteContext& ctx) {
     VkCommandBuffer cmd = ctx.cmd;
 
+    uint32_t slot = m_frameCounter % kRingSize;
+
+    // Read back the step statistics for this slot (from a frame at least
+    // kRingSize frames old, so the GPU work is guaranteed complete).
+    {
+        const uint32_t* mapped = static_cast<const uint32_t*>(m_stepBuffers[slot]->mapped());
+        uint32_t totalSteps = mapped[0];
+        uint32_t totalPixels = mapped[1];
+        if (totalPixels > 0) {
+            m_avgSteps = static_cast<float>(totalSteps) / static_cast<float>(totalPixels);
+        }
+    }
+
+    // Update rolling GPU timer average for the same slot.
+    {
+        float ms = 0.0f;
+        if (m_timer->fetchMs(slot, ms)) {
+            m_lastGpuMs = ms;
+            m_avgGpuMs = m_timer->averageMs();
+        }
+    }
+
+    // Clear the statistics buffer and bind it for this frame.
+    vkCmdFillBuffer(cmd, m_stepBuffers[slot]->handle(), 0, VK_WHOLE_SIZE, 0);
+
+    VkBufferMemoryBarrier clearBarrier{};
+    clearBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    clearBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    clearBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    clearBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    clearBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    clearBarrier.buffer = m_stepBuffers[slot]->handle();
+    clearBarrier.offset = 0;
+    clearBarrier.size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         0, 0, nullptr, 1, &clearBarrier, 0, nullptr);
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        m_pipelineLayout, 0, 1, &m_descriptorSet, 0, nullptr);
+        m_pipelineLayout, 0, 1, &m_descriptorSets[slot], 0, nullptr);
 
     VkExtent2D extent = m_rhi->extent();
     float aspect = static_cast<float>(extent.width) / static_cast<float>(extent.height);
@@ -247,15 +326,23 @@ void SSRPass::execute(const PassExecuteContext& ctx) {
     push.params.w    = 1.0f;    // roughnessScale
     push.screenSize  = glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
     push.displayMode = m_enabled ? m_displayMode : 0;
-    push.traceMode   = m_enabled ? m_traceMode : 1;
+    push.traceMode   = m_enabled ? m_traceMode : 0;
     push.hizMaxMip   = (m_hizHandle != RenderGraph::InvalidResource) ? 10 : 0;
+    push.enabled     = m_enabled ? 1 : 0;
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(SSRPush), &push);
 
+    m_timer->resetSlot(cmd, slot);
+    m_timer->begin(cmd, slot);
+
     uint32_t groupsX = (extent.width + 15) / 16;
     uint32_t groupsY = (extent.height + 15) / 16;
     vkCmdDispatch(cmd, groupsX, groupsY, 1);
+
+    m_timer->end(cmd, slot);
+
+    ++m_frameCounter;
 }
 
 } // namespace kazu

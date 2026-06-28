@@ -21,7 +21,7 @@ class RHI;
 // Zero ImGui dependency — can be defined in technique headers.
 // ---------------------------------------------------------------------------
 struct PanelItem {
-    enum Type { Enum, Bool, Float, Int, Separator };
+    enum Type { Enum, Bool, Float, Int, Separator, Label };
     Type type;
     std::string label;
     union {

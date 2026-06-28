@@ -26,6 +26,7 @@
 #include "rendergraph/RenderGraph.h"
 #include <GLFW/glfw3.h>
 #include <vector>
+#include <cstdio>
 
 namespace kazu {
 
@@ -294,6 +295,18 @@ void DeferredShading::render(const RenderFrameContext& frame) {
         m_ssrPass->setTraceMode(m_ssrTraceMode);
     }
 
+    // ---- CPU frame-time tracking per SSR mode ----
+    {
+        double now = glfwGetTime();
+        if (m_lastFrameTime > 0.0) {
+            float dtMs = static_cast<float>((now - m_lastFrameTime) * 1000.0);
+            int modeIdx = m_ssrEnabled ? m_ssrTraceMode : 0;
+            float& avg = m_avgFrameTimeMs[modeIdx];
+            avg = avg * 0.95f + dtMs * 0.05f;
+        }
+        m_lastFrameTime = now;
+    }
+
     // ---- TAA jitter / matrix setup ----
     bool taaEnabled = m_lightingSettings.enableTAA;
     glm::vec2 jitter(0.0f);
@@ -465,6 +478,32 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     ssrTraceItem.e.names = ssrTraceModes;
     ssrTraceItem.e.count = 3;
     desc.items.push_back(ssrTraceItem);
+
+    if (m_ssrPass) {
+        char buf[128];
+        PanelItem gpuLabel{};
+        gpuLabel.type = PanelItem::Label;
+        std::snprintf(buf, sizeof(buf),
+            "SSR GPU: %.3f ms (avg %.3f)",
+            m_ssrPass->lastGpuTimeMs(), m_ssrPass->avgGpuTimeMs());
+        gpuLabel.label = buf;
+        desc.items.push_back(gpuLabel);
+
+        PanelItem stepLabel{};
+        stepLabel.type = PanelItem::Label;
+        std::snprintf(buf, sizeof(buf), "Avg ray steps: %.1f", m_ssrPass->avgSteps());
+        stepLabel.label = buf;
+        desc.items.push_back(stepLabel);
+
+        int modeIdx = m_ssrEnabled ? m_ssrTraceMode : 0;
+        PanelItem frameLabel{};
+        frameLabel.type = PanelItem::Label;
+        std::snprintf(buf, sizeof(buf),
+            "Frame time (%s): %.3f ms",
+            ssrTraceModes[modeIdx], m_avgFrameTimeMs[modeIdx]);
+        frameLabel.label = buf;
+        desc.items.push_back(frameLabel);
+    }
 
     PanelItem taaItem{};
     taaItem.type = PanelItem::Bool;

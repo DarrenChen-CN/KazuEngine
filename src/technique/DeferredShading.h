@@ -108,6 +108,10 @@ private:
     int  m_ssrDisplayMode = 0; // 0 = composite, 1 = reflection only, 2 = hit mask
     int  m_ssrTraceMode = 1;   // 0 = basic, 1 = binary, 2 = Hi-Z
 
+    // Per-trace-mode rolling-average CPU frame time for the efficiency panel.
+    double m_lastFrameTime = 0.0;
+    std::array<float, 3> m_avgFrameTimeMs{};
+
     Texture* m_iblIrradiance = nullptr;
     Texture* m_iblPrefilter  = nullptr;
     Texture* m_iblLut        = nullptr;

@@ -9,8 +9,11 @@
 #pragma once
 #include <vulkan/vulkan.h>
 #include <memory>
+#include <array>
 #include "pass/Pass.h"
 #include "rendergraph/RenderGraph.h"
+#include "core/GPUTimer.h"
+#include "core/Buffer.h"
 
 namespace kazu {
 
@@ -42,11 +45,18 @@ public:
     void setTraceMode(int mode) { m_traceMode = mode; }
     int  traceMode() const { return m_traceMode; }
 
+    // Efficiency metrics for the ImGui panel.
+    float lastGpuTimeMs() const { return m_lastGpuMs; }
+    float avgGpuTimeMs() const { return m_avgGpuMs; }
+    float avgSteps() const { return m_avgSteps; }
+
     RenderGraph::ResourceHandle outputHandle() const { return m_outputHandle; }
 
 private:
     void createPipeline();
-    void createDescriptorSet();
+    void createDescriptorSets();
+
+    static constexpr uint32_t kRingSize = 2;
 
     RHI* m_rhi = nullptr;
     RenderGraph* m_renderGraph = nullptr;
@@ -63,8 +73,16 @@ private:
     VkPipelineLayout      m_pipelineLayout      = VK_NULL_HANDLE;
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool      m_descriptorPool      = VK_NULL_HANDLE;
-    VkDescriptorSet       m_descriptorSet       = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, kRingSize> m_descriptorSets{};
     VkSampler             m_sampler             = VK_NULL_HANDLE;
+
+    std::unique_ptr<GPUTimer> m_timer;
+    std::array<std::unique_ptr<Buffer>, kRingSize> m_stepBuffers;
+    uint32_t m_frameCounter = 0;
+
+    float m_lastGpuMs = 0.0f;
+    float m_avgGpuMs = 0.0f;
+    float m_avgSteps = 0.0f;
 
     bool m_enabled = true;
     int  m_displayMode = 0; // 0 = composite, 1 = reflection only, 2 = hit mask
