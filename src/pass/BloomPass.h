@@ -50,12 +50,15 @@ private:
     RenderGraph::PassHandle m_passHandle = 0;
 
     RenderGraph::ResourceHandle m_inputHDRHandle = RenderGraph::InvalidResource;
+    RenderGraph::ResourceHandle m_bloomDownHandle = RenderGraph::InvalidResource;
     RenderGraph::ResourceHandle m_bloomHandle = RenderGraph::InvalidResource;
 
+    Image* m_bloomDownImage = nullptr;
     Image* m_bloomImage = nullptr;
     uint32_t m_mipLevels = 1;
 
-    // Per-mip views of the bloom image.
+    // Per-mip views of the bloom downsample and upsample images.
+    std::vector<VkImageView> m_downMipViews;
     std::vector<VkImageView> m_mipViews;
 
     // One pipeline per shader stage.

@@ -91,6 +91,7 @@ void ShadowMapPass::execute(const PassExecuteContext& ctx) {
     ShadowCamera shadowCamera = selectShadowCamera(
         m_scene->directionalLight(),
         m_scene->pointLights(),
+        m_scene->areaLights(),
         m_scene->bounds());
     if (!shadowCamera.valid) {
         spdlog::warn("ShadowMapPass: No shadow-casting light found, skipping shadow map rendering.");

@@ -9,12 +9,21 @@ layout(push_constant) uniform Push {
     int enabled;
 } pc;
 
-#define FXAA_SPAN_MAX     8.0
-#define FXAA_REDUCE_MUL   (1.0 / 8.0)
-#define FXAA_REDUCE_MIN   (1.0 / 128.0)
+#define FXAA_EDGE_THRESHOLD      (1.0 / 8.0)
+#define FXAA_EDGE_THRESHOLD_MIN  (1.0 / 24.0)
+#define FXAA_SEARCH_STEPS        8
+#define FXAA_SUBPIX_QUALITY      0.75
 
 float luma(vec3 rgb) {
     return dot(rgb, vec3(0.299, 0.587, 0.114));
+}
+
+vec3 sampleColor(vec2 uv) {
+    return texture(sceneColorSampler, uv).rgb;
+}
+
+float sampleLuma(vec2 uv) {
+    return luma(sampleColor(uv));
 }
 
 void main() {
@@ -31,46 +40,101 @@ void main() {
 
     vec2 rcpFrame = 1.0 / vec2(size);
 
-    vec3 rgbM  = texture(sceneColorSampler, uv).rgb;
-    vec3 rgbNW = texture(sceneColorSampler, uv + vec2(-1.0, -1.0) * rcpFrame).rgb;
-    vec3 rgbNE = texture(sceneColorSampler, uv + vec2( 1.0, -1.0) * rcpFrame).rgb;
-    vec3 rgbSW = texture(sceneColorSampler, uv + vec2(-1.0,  1.0) * rcpFrame).rgb;
-    vec3 rgbSE = texture(sceneColorSampler, uv + vec2( 1.0,  1.0) * rcpFrame).rgb;
+    vec3 rgbM = sampleColor(uv);
+    float lumaM = luma(rgbM);
 
-    float lumaM  = luma(rgbM);
-    float lumaNW = luma(rgbNW);
-    float lumaNE = luma(rgbNE);
-    float lumaSW = luma(rgbSW);
-    float lumaSE = luma(rgbSE);
+    float lumaN  = sampleLuma(uv + vec2( 0.0, -1.0) * rcpFrame);
+    float lumaS  = sampleLuma(uv + vec2( 0.0,  1.0) * rcpFrame);
+    float lumaW  = sampleLuma(uv + vec2(-1.0,  0.0) * rcpFrame);
+    float lumaE  = sampleLuma(uv + vec2( 1.0,  0.0) * rcpFrame);
+    float lumaNW = sampleLuma(uv + vec2(-1.0, -1.0) * rcpFrame);
+    float lumaNE = sampleLuma(uv + vec2( 1.0, -1.0) * rcpFrame);
+    float lumaSW = sampleLuma(uv + vec2(-1.0,  1.0) * rcpFrame);
+    float lumaSE = sampleLuma(uv + vec2( 1.0,  1.0) * rcpFrame);
 
-    float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
-    float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
+    float lumaMin = min(lumaM, min(min(lumaN, lumaS), min(lumaW, lumaE)));
+    float lumaMax = max(lumaM, max(max(lumaN, lumaS), max(lumaW, lumaE)));
+    float lumaRange = lumaMax - lumaMin;
 
-    vec2 dir;
-    dir.x = -((lumaNW + lumaNE) - (lumaSW + lumaSE));
-    dir.y =  ((lumaNW + lumaSW) - (lumaNE + lumaSE));
+    if (lumaRange < max(FXAA_EDGE_THRESHOLD_MIN, lumaMax * FXAA_EDGE_THRESHOLD)) {
+        imageStore(outImage, texel, vec4(rgbM, 1.0));
+        return;
+    }
 
-    float dirReduce = max(
-        (lumaNW + lumaNE + lumaSW + lumaSE) * 0.25 * FXAA_REDUCE_MUL,
-        FXAA_REDUCE_MIN);
+    float edgeHorizontal =
+        abs(-2.0 * lumaM + lumaN + lumaS) * 2.0 +
+        abs(-2.0 * lumaW + lumaNW + lumaSW) +
+        abs(-2.0 * lumaE + lumaNE + lumaSE);
 
-    float rcpDirMin = 1.0 / (min(abs(dir.x), abs(dir.y)) + dirReduce);
-    dir = clamp(dir * rcpDirMin,
-                vec2(-FXAA_SPAN_MAX),
-                vec2( FXAA_SPAN_MAX)) * rcpFrame;
+    float edgeVertical =
+        abs(-2.0 * lumaM + lumaW + lumaE) * 2.0 +
+        abs(-2.0 * lumaN + lumaNW + lumaNE) +
+        abs(-2.0 * lumaS + lumaSW + lumaSE);
 
-    vec3 rgbA = 0.5 * (
-        texture(sceneColorSampler, uv + dir * (1.0 / 3.0 - 0.5)).rgb +
-        texture(sceneColorSampler, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+    bool isHorizontal = edgeHorizontal >= edgeVertical;
 
-    vec3 rgbB = rgbA * 0.5 + 0.25 * (
-        texture(sceneColorSampler, uv + dir * -0.5).rgb +
-        texture(sceneColorSampler, uv + dir *  0.5).rgb);
+    float lumaNeg = isHorizontal ? lumaN : lumaW;
+    float lumaPos = isHorizontal ? lumaS : lumaE;
+    float gradientNeg = abs(lumaNeg - lumaM);
+    float gradientPos = abs(lumaPos - lumaM);
 
-    float lumaB = luma(rgbB);
+    bool pairWithPositive = gradientPos >= gradientNeg;
+    float pairLuma = 0.5 * (lumaM + (pairWithPositive ? lumaPos : lumaNeg));
+    float gradientThreshold = 0.25 * max(gradientNeg, gradientPos);
 
-    if ((lumaB < lumaMin) || (lumaB > lumaMax))
-        imageStore(outImage, texel, vec4(rgbA, 1.0));
-    else
-        imageStore(outImage, texel, vec4(rgbB, 1.0));
+    vec2 normalStep = isHorizontal ? vec2(0.0, rcpFrame.y) : vec2(rcpFrame.x, 0.0);
+    vec2 edgeStep   = isHorizontal ? vec2(rcpFrame.x, 0.0) : vec2(0.0, rcpFrame.y);
+
+    vec2 edgeUv = uv + normalStep * (pairWithPositive ? 0.5 : -0.5);
+    vec2 uvNeg = edgeUv;
+    vec2 uvPos = edgeUv;
+
+    float lumaEndNeg = 0.0;
+    float lumaEndPos = 0.0;
+    bool doneNeg = false;
+    bool donePos = false;
+
+    for (int i = 1; i <= FXAA_SEARCH_STEPS; ++i) {
+        if (!doneNeg) {
+            uvNeg -= edgeStep;
+            lumaEndNeg = sampleLuma(uvNeg) - pairLuma;
+            doneNeg = abs(lumaEndNeg) >= gradientThreshold;
+        }
+
+        if (!donePos) {
+            uvPos += edgeStep;
+            lumaEndPos = sampleLuma(uvPos) - pairLuma;
+            donePos = abs(lumaEndPos) >= gradientThreshold;
+        }
+
+        if (doneNeg && donePos) {
+            break;
+        }
+    }
+
+    float dstNeg = isHorizontal ? (uv.x - uvNeg.x) : (uv.y - uvNeg.y);
+    float dstPos = isHorizontal ? (uvPos.x - uv.x) : (uvPos.y - uv.y);
+    float dstMin = min(dstNeg, dstPos);
+    float edgeLength = dstNeg + dstPos;
+
+    float pixelOffset = 0.0;
+    if (edgeLength > 0.0) {
+        bool closerToNeg = dstNeg < dstPos;
+        float lumaEnd = closerToNeg ? lumaEndNeg : lumaEndPos;
+        bool correctVariation = ((lumaM - pairLuma) < 0.0) != (lumaEnd < 0.0);
+
+        if (correctVariation) {
+            pixelOffset = 0.5 - dstMin / edgeLength;
+        }
+    }
+
+    float lumaAverage = (lumaN + lumaS + lumaW + lumaE) * 0.25;
+    float subpix = clamp(abs(lumaAverage - lumaM) / lumaRange, 0.0, 1.0);
+    subpix = smoothstep(0.0, 1.0, subpix);
+    subpix = subpix * subpix * FXAA_SUBPIX_QUALITY;
+
+    float finalOffset = max(pixelOffset, subpix);
+    vec2 finalUv = uv + normalStep * (pairWithPositive ? finalOffset : -finalOffset);
+
+    imageStore(outImage, texel, vec4(sampleColor(finalUv), 1.0));
 }

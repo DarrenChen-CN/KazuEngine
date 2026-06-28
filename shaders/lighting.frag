@@ -23,6 +23,8 @@ layout(push_constant) uniform PushConstants {
     vec4 lightDirection;
     vec4 lightColorIntensity;
     vec4 viewPos;
+    vec4 areaLightPositionSize; // xyz = center, w = half width
+    vec4 areaLightDirectionSize; // xyz = emitting direction, w = half height
     float shadowBias;
     float pcfFilterSize;
     float lightWidth;
@@ -238,7 +240,7 @@ vec3 evaluateIBL(vec3 albedo, float metallic, float roughness, vec3 N, vec3 V, f
     float maxReflectionLod = float(textureQueryLevels(prefilterMap) - 1);
     vec3 prefilteredColor = textureLod(prefilterMap, R, roughness * maxReflectionLod).rgb;
     vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
-    vec3 specular = prefilteredColor * (F * brdf.x + brdf.y);
+    vec3 specular = prefilteredColor * (F0 * brdf.x + brdf.y);
 
     return (kD * diffuse * ao + specular);
 }
@@ -288,13 +290,42 @@ void main() {
     }
 
     vec3 worldPos = reconstructWorldPos(fragNdc, depth);
-    vec3 lightDir = normalize(-pc.lightDirection.xyz);
     vec3 viewDir = normalize(pc.viewPos.xyz - worldPos);
+
+    bool areaLightEnabled = pc.areaLightPositionSize.w > 0.0 && pc.areaLightDirectionSize.w > 0.0;
+    vec3 lightDir;
+    vec3 radiance;
+    float shadow = 0.0;
+
+    if (areaLightEnabled) {
+        vec3 areaCenter = pc.areaLightPositionSize.xyz;
+        vec3 areaNormal = normalize(pc.areaLightDirectionSize.xyz);
+        vec3 referenceUp = (abs(areaNormal.y) < 0.99)
+            ? vec3(0.0, 1.0, 0.0)
+            : vec3(1.0, 0.0, 0.0);
+        vec3 areaRight = normalize(cross(referenceUp, areaNormal));
+        vec3 areaUp = normalize(cross(areaNormal, areaRight));
+
+        vec3 local = worldPos - areaCenter;
+        float x = clamp(dot(local, areaRight), -pc.areaLightPositionSize.w, pc.areaLightPositionSize.w);
+        float y = clamp(dot(local, areaUp), -pc.areaLightDirectionSize.w, pc.areaLightDirectionSize.w);
+        vec3 closestPoint = areaCenter + areaRight * x + areaUp * y;
+
+        vec3 toLight = closestPoint - worldPos;
+        float dist2 = max(dot(toLight, toLight), EPS);
+        lightDir = toLight * inversesqrt(dist2);
+
+        float emissionFacing = max(dot(-lightDir, areaNormal), 0.0);
+        float attenuation = emissionFacing / max(dist2, 1.0);
+        shadow = computeShadow(worldPos, normal, lightDir);
+        radiance = pc.lightColorIntensity.rgb * pc.lightColorIntensity.a * attenuation;
+    } else {
+        lightDir = normalize(-pc.lightDirection.xyz);
+        shadow = computeShadow(worldPos, normal, lightDir);
+        radiance = pc.lightColorIntensity.rgb * pc.lightColorIntensity.a;
+    }
+
     float diff = max(dot(normal, lightDir), 0.0);
-
-    float shadow = computeShadow(worldPos, normal, lightDir);
-
-    vec3 radiance = pc.lightColorIntensity.rgb * pc.lightColorIntensity.a;
     vec3 direct;
     if (pc.lightingModel == 1) {
         direct = evaluatePBR(albedo, metallic, roughness, normal, viewDir, lightDir, radiance);

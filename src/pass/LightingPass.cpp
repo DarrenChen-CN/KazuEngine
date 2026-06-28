@@ -17,6 +17,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <array>
+#include <algorithm>
 
 namespace kazu {
 
@@ -28,6 +29,8 @@ struct LightingPush {
     glm::vec4 lightDirection;
     glm::vec4 lightColorIntensity;
     glm::vec4 viewPos;
+    glm::vec4 areaLightPositionSize;
+    glm::vec4 areaLightDirectionSize;
     float     shadowBias;
     float     pcfFilterSize;
     float     lightWidth;
@@ -370,6 +373,7 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
     ShadowCamera shadowCamera = selectShadowCamera(
         m_scene->directionalLight(),
         m_scene->pointLights(),
+        m_scene->areaLights(),
         m_scene->bounds());
     if (!shadowCamera.valid) {
         shadowCamera = buildDirectionalShadowCamera(m_scene->directionalLight(), m_scene->bounds());
@@ -378,6 +382,14 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
     push.lightDirection = glm::vec4(shadowCamera.lightDirection, 0.0f);
     push.lightColorIntensity = glm::vec4(shadowCamera.color, shadowCamera.intensity);
     push.lightViewProj = shadowCamera.viewProj;
+    push.areaLightPositionSize = glm::vec4(0.0f);
+    push.areaLightDirectionSize = glm::vec4(0.0f);
+    if (!m_scene->areaLights().empty()) {
+        const AreaLight& area = m_scene->areaLights().front();
+        push.lightColorIntensity = glm::vec4(area.color, area.intensity);
+        push.areaLightPositionSize = glm::vec4(area.position, std::max(area.width, 0.0f) * 0.5f);
+        push.areaLightDirectionSize = glm::vec4(area.direction, std::max(area.height, 0.0f) * 0.5f);
+    }
 
     push.viewPos = glm::vec4(ctx.camera->position(), 0.0f);
     push.shadowBias = m_settings.shadowBias;

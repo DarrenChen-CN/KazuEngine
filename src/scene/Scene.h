@@ -75,6 +75,7 @@ public:
     const SceneConfig& config() const { return m_config; }
     const DirectionalLight& directionalLight() const { return m_directionalLight; }
     const std::vector<PointLight>& pointLights() const { return m_pointLights; }
+    const std::vector<AreaLight>& areaLights() const { return m_areaLights; }
     const std::vector<Light*>& lights() const { return m_lights; }
     const RendererSettings& rendererSettings() const { return m_rendererSettings; }
     const Bounds& bounds() const { return m_bounds; }
@@ -85,6 +86,7 @@ private:
     RendererSettings m_rendererSettings;
     DirectionalLight m_directionalLight;
     std::vector<PointLight> m_pointLights;
+    std::vector<AreaLight> m_areaLights;
     std::vector<Light*> m_lights;
 
     // Resource pools (Scene owns the lifetime)
@@ -100,7 +102,7 @@ private:
     // Instances (reference pools above; material filled in by buildMaterials)
     std::vector<ModelInstance> m_instances;
 
-    void loadObjModel(Context& ctx, const std::string& path, float scale,
+    void loadObjModel(Context& ctx, const std::string& path, const glm::vec3& scale,
                       const glm::vec3& position = glm::vec3(0.0f),
                       bool snapToGround = true,
                       const std::string& texturePathOverride = {},
@@ -111,11 +113,14 @@ private:
                       float metallic = 0.0f,
                       float roughness = 1.0f,
                       float ao = 1.0f,
-                      bool flipV = true);
+                      bool flipV = true,
+                      const glm::vec3& rotationDegrees = glm::vec3(0.0f),
+                      bool centerPivot = false);
     void loadGltfModel(Context& ctx, const std::string& path, float scale,
                        const glm::vec3& position = glm::vec3(0.0f), bool snapToGround = true);
     void addGroundPlane(Context& ctx, float size = 10.0f, float y = -0.1f);
     void addLightVisualizers(Context& ctx, float size = 0.15f);
+    void addAreaLightVisualizers(Context& ctx);
 
     // Resource loaders with path-based deduplication
     Mesh* getOrLoadMesh(Context& ctx, const std::string& path);
@@ -127,3 +132,4 @@ private:
 };
 
 } // namespace kazu
+

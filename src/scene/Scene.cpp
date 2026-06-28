@@ -14,6 +14,7 @@
 #include <fastgltf/glm_element_traits.hpp>
 #include <fstream>
 #include <filesystem>
+#include <cmath>
 #include <spdlog/spdlog.h>
 
 using json = nlohmann::json;
@@ -29,6 +30,32 @@ glm::vec3 readVec3(const json& node, const char* key, const glm::vec3& fallback)
                      values.size() > 2 ? values[2] : fallback.z);
 }
 
+
+glm::vec3 readScale(const json& node, const glm::vec3& fallback) {
+    auto it = node.find("scale");
+    if (it == node.end()) {
+        return fallback;
+    }
+    if (it->is_number()) {
+        float s = it->get<float>();
+        return glm::vec3(s);
+    }
+    if (it->is_array() && !it->empty()) {
+        float x = (*it)[0].get<float>();
+        float y = it->size() > 1 ? (*it)[1].get<float>() : x;
+        float z = it->size() > 2 ? (*it)[2].get<float>() : x;
+        return glm::vec3(x, y, z);
+    }
+    return fallback;
+}
+
+glm::mat4 rotationFromDegrees(const glm::vec3& degrees) {
+    glm::mat4 rotation(1.0f);
+    rotation = glm::rotate(rotation, glm::radians(degrees.x), glm::vec3(1.0f, 0.0f, 0.0f));
+    rotation = glm::rotate(rotation, glm::radians(degrees.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    rotation = glm::rotate(rotation, glm::radians(degrees.z), glm::vec3(0.0f, 0.0f, 1.0f));
+    return rotation;
+}
 int parseLightingModel(const std::string& value, int fallback) {
     if (value == "lambert") return LightingModel_Lambert;
     if (value == "pbr") return LightingModel_PBR;
@@ -96,6 +123,8 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
                 features.value("bloom", m_rendererSettings.lighting.enableBloom);
             m_rendererSettings.lighting.enableTAA =
                 features.value("taa", m_rendererSettings.lighting.enableTAA);
+            m_rendererSettings.lighting.enableFXAA =
+                features.value("fxaa", m_rendererSettings.lighting.enableFXAA);
             m_rendererSettings.lighting.bloomThreshold =
                 features.value("bloomThreshold", m_rendererSettings.lighting.bloomThreshold);
             m_rendererSettings.lighting.bloomIntensity =
@@ -130,6 +159,7 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     m_directionalLight.visualize = light.value("visualize", false);
 
     m_pointLights.clear();
+    m_areaLights.clear();
     auto parsePointLight = [&](const json& node) {
         PointLight point{};
         point.position = readVec3(node, "position", glm::vec3(2.0f, 3.0f, 2.0f));
@@ -139,6 +169,22 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
         point.castsShadow = node.value("shadow", true);
         point.visualize = node.value("visualize", false);
         m_pointLights.push_back(point);
+    };
+    auto parseAreaLight = [&](const json& node) {
+        AreaLight area{};
+        area.position = readVec3(node, "position", glm::vec3(0.0f, 2.0f, 0.0f));
+        area.direction = readVec3(node, "direction", glm::vec3(0.0f, -1.0f, 0.0f));
+        if (glm::length(area.direction) < 0.0001f) {
+            area.direction = glm::vec3(0.0f, -1.0f, 0.0f);
+        }
+        area.direction = glm::normalize(area.direction);
+        area.color = readVec3(node, "color", glm::vec3(1.0f));
+        area.intensity = node.value("intensity", 1.0f);
+        area.width = node.value("width", 1.0f);
+        area.height = node.value("height", 1.0f);
+        area.castsShadow = node.value("shadow", false);
+        area.visualize = node.value("visualize", true);
+        m_areaLights.push_back(area);
     };
     auto parseDirectionalLight = [&](const json& node) {
         glm::vec3 parsedDirection = readVec3(node, "direction", m_directionalLight.direction);
@@ -154,6 +200,8 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
 
     if (light.value("type", std::string{}) == "point") {
         parsePointLight(light);
+    } else if (light.value("type", std::string{}) == "area") {
+        parseAreaLight(light);
     } else if (light.value("type", std::string{}) == "directional") {
         parseDirectionalLight(light);
     }
@@ -167,6 +215,8 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
             auto type = item.value("type", std::string{});
             if (type == "point") {
                 parsePointLight(item);
+            } else if (type == "area") {
+                parseAreaLight(item);
             } else if (type == "directional") {
                 parseDirectionalLight(item);
             }
@@ -186,6 +236,7 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
                  m_directionalLight.color.x, m_directionalLight.color.y, m_directionalLight.color.z,
                  m_directionalLight.intensity);
     spdlog::info("[Scene] Point Lights: {}", m_pointLights.size());
+    spdlog::info("[Scene] Area Lights: {}", m_areaLights.size());
     spdlog::info("[Scene] Renderer Settings: lightingModel={}, shadowMode={}, pcfSamples={}",
                  m_rendererSettings.lighting.lightingModel,
                  m_rendererSettings.lighting.shadowMode,
@@ -196,7 +247,8 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     for (const auto& model : j.value("models", json::array())) {
         std::string path = model.value("path", "");
         std::string format = model.value("format", "obj");
-        float scale = model.value("scale", 1.0f);
+        glm::vec3 scale = readScale(model, glm::vec3(1.0f));
+        float uniformScale = scale.x;
         auto pos = model.value("position", std::vector<float>{0.0f, 0.0f, 0.0f});
         glm::vec3 position(pos[0], pos.size() > 1 ? pos[1] : 0.0f, pos.size() > 2 ? pos[2] : 0.0f);
         bool snapToGround = model.value("snapToGround", true);
@@ -213,6 +265,8 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
         float roughness = model.value("roughness", 1.0f);
         float ao = model.value("ao", 1.0f);
         bool flipV = model.value("flipV", format == "obj");
+        glm::vec3 rotationDegrees = readVec3(model, "rotationDegrees", glm::vec3(0.0f));
+        bool centerPivot = model.value("centerPivot", false);
 
         if (path.empty()) continue;
 
@@ -220,9 +274,10 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
             loadObjModel(ctx, path, scale, position, snapToGround,
                          texturePathOverride, normalTexturePath,
                          metallicRoughnessTexturePath, aoTexturePath,
-                         baseColorFactor, metallic, roughness, ao, flipV);
+                         baseColorFactor, metallic, roughness, ao, flipV,
+                         rotationDegrees, centerPivot);
         } else if (format == "gltf" || format == "glb") {
-            loadGltfModel(ctx, path, scale, position, snapToGround);
+            loadGltfModel(ctx, path, uniformScale, position, snapToGround);
         } else {
             spdlog::warn("[Scene] Unknown model format: {}", format);
         }
@@ -240,6 +295,7 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     if (hasLightVisualizer) {
         addLightVisualizers(ctx);
     }
+    addAreaLightVisualizers(ctx);
 
     // Compute world-space bounds from all model instances.
     m_bounds = Bounds{};
@@ -309,7 +365,7 @@ void Scene::draw(VkCommandBuffer cmd, VkPipelineLayout pipelineLayout,
     }
 }
 
-void Scene::loadObjModel(Context& ctx, const std::string& path, float scale,
+void Scene::loadObjModel(Context& ctx, const std::string& path, const glm::vec3& scale,
                          const glm::vec3& position, bool snapToGround,
                          const std::string& texturePathOverride,
                          const std::string& normalTexturePath,
@@ -319,7 +375,9 @@ void Scene::loadObjModel(Context& ctx, const std::string& path, float scale,
                          float metallic,
                          float roughness,
                          float ao,
-                         bool flipV) {
+                         bool flipV,
+                         const glm::vec3& rotationDegrees,
+                         bool centerPivot) {
     // Use explicit scene texture when available; otherwise keep the legacy
     // OBJ fallback of picking an image from the model directory.
     std::filesystem::path modelPath(path);
@@ -348,11 +406,18 @@ void Scene::loadObjModel(Context& ctx, const std::string& path, float scale,
     glm::vec3 finalPosition = position;
     if (snapToGround && meshPtr->bounds().isValid()) {
         float minY = meshPtr->bounds().min.y;
-        finalPosition.y = -0.1f - minY * scale;
+        finalPosition.y = -0.1f - minY * scale.y;
+    }
+
+    glm::vec3 pivot(0.0f);
+    if (centerPivot && meshPtr->bounds().isValid()) {
+        pivot = meshPtr->bounds().center();
     }
 
     inst.transform = glm::translate(glm::mat4(1.0f), finalPosition)
-                   * glm::scale(glm::mat4(1.0f), glm::vec3(scale));
+                   * rotationFromDegrees(rotationDegrees)
+                   * glm::scale(glm::mat4(1.0f), scale)
+                   * glm::translate(glm::mat4(1.0f), -pivot);
     inst.pendingAlbedoMap = texturePtr;
     inst.pendingNormalMap = normalTexturePtr;
     inst.pendingMetallicRoughnessMap = metallicRoughnessTexturePtr;
@@ -576,6 +641,9 @@ void Scene::rebuildLightViews() {
     for (auto& point : m_pointLights) {
         m_lights.push_back(&point);
     }
+    for (auto& area : m_areaLights) {
+        m_lights.push_back(&area);
+    }
 }
 
 void Scene::addGroundPlane(Context& ctx, float size, float y) {
@@ -629,4 +697,60 @@ void Scene::addLightVisualizers(Context& ctx, float size) {
     spdlog::info("[Scene] Added {} light visualizer(s)", visualizerCount);
 }
 
+void Scene::addAreaLightVisualizers(Context& ctx) {
+    Texture* texturePtr = getOrLoadTexture(ctx, "assets/textures/white.png");
+
+    uint32_t visualizerCount = 0;
+    for (size_t index = 0; index < m_areaLights.size(); ++index) {
+        const AreaLight& area = m_areaLights[index];
+        if (!area.visualize) continue;
+
+        glm::vec3 normal = area.direction;
+        if (glm::length(normal) < 0.0001f) {
+            normal = glm::vec3(0.0f, -1.0f, 0.0f);
+        }
+        normal = glm::normalize(normal);
+
+        glm::vec3 referenceUp = (std::abs(normal.y) < 0.99f)
+            ? glm::vec3(0.0f, 1.0f, 0.0f)
+            : glm::vec3(1.0f, 0.0f, 0.0f);
+        glm::vec3 right = glm::normalize(glm::cross(referenceUp, normal));
+        glm::vec3 up = glm::normalize(glm::cross(normal, right));
+
+        float halfW = std::max(area.width, 0.01f) * 0.5f;
+        float halfH = std::max(area.height, 0.01f) * 0.5f;
+        glm::vec3 c = area.position;
+
+        std::vector<Vertex> vertices = {
+            {{c - right * halfW - up * halfH}, normal, {0.0f, 0.0f}},
+            {{c + right * halfW - up * halfH}, normal, {1.0f, 0.0f}},
+            {{c + right * halfW + up * halfH}, normal, {1.0f, 1.0f}},
+            {{c - right * halfW + up * halfH}, normal, {0.0f, 1.0f}},
+        };
+        std::vector<uint32_t> indices = {0, 1, 2, 0, 2, 3};
+
+        Mesh* meshPtr = getOrLoadMesh(ctx, "__area_light_" + std::to_string(index), vertices, indices);
+
+        ModelInstance inst;
+        inst.mesh = meshPtr;
+        inst.transform = glm::mat4(1.0f);
+        inst.pendingAlbedoMap = texturePtr;
+        inst.pendingBaseColorFactor = glm::vec4(area.color * area.intensity, 1.0f);
+        inst.pendingMetallic = 0.0f;
+        inst.pendingRoughness = 0.1f;
+        inst.unlit = true;
+        m_instances.push_back(inst);
+        ++visualizerCount;
+    }
+
+    if (visualizerCount > 0) {
+        spdlog::info("[Scene] Added {} area light visualizer(s)", visualizerCount);
+    }
+}
+
 } // namespace kazu
+
+
+
+
+

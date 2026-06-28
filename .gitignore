@@ -42,6 +42,8 @@ assets/
 # Local docs
 docs/
 
+tools
+
 # FetchContent dependencies (downloaded to external/)
 /external/glfw/
 /external/vma/

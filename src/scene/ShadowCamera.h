@@ -78,8 +78,40 @@ inline ShadowCamera buildPointShadowCamera(const PointLight& light,
     return camera;
 }
 
+inline ShadowCamera buildAreaShadowCamera(const AreaLight& light,
+                                          const Bounds& bounds) {
+    ShadowCamera camera{};
+    camera.valid = light.castsShadow;
+    camera.lightType = LightType::Area;
+    camera.color = light.color;
+    camera.intensity = light.intensity;
+    if (!camera.valid) {
+        return camera;
+    }
+
+    glm::vec3 center = bounds.isValid() ? bounds.center() : glm::vec3(0.0f);
+    glm::vec3 toCenter = center - light.position;
+    if (glm::length(toCenter) < 0.0001f) {
+        toCenter = light.direction;
+    }
+    if (glm::length(toCenter) < 0.0001f) {
+        toCenter = glm::vec3(0.0f, -1.0f, 0.0f);
+    }
+    camera.lightDirection = glm::normalize(toCenter);
+
+    float sceneRadius = bounds.isValid() ? bounds.radius() : 10.0f;
+    float lightDist = glm::length(light.position - center);
+    float zNear = glm::max(0.01f, 0.1f * lightDist);
+    float zFar = glm::max(lightDist + sceneRadius, 2.0f * lightDist);
+    camera.view = glm::lookAt(light.position, center, stableShadowUp(camera.lightDirection));
+    camera.proj = glm::perspective(glm::radians(90.0f), 1.0f, zNear, zFar);
+    camera.viewProj = camera.proj * camera.view;
+    return camera;
+}
+
 inline ShadowCamera selectShadowCamera(const DirectionalLight& directional,
                                        const std::vector<PointLight>& pointLights,
+                                       const std::vector<AreaLight>& areaLights,
                                        const Bounds& bounds) {
     if (directional.castsShadow) {
         return buildDirectionalShadowCamera(directional, bounds);
@@ -88,6 +120,12 @@ inline ShadowCamera selectShadowCamera(const DirectionalLight& directional,
     for (const auto& point : pointLights) {
         if (point.castsShadow) {
             return buildPointShadowCamera(point, bounds);
+        }
+    }
+
+    for (const auto& area : areaLights) {
+        if (area.castsShadow) {
+            return buildAreaShadowCamera(area, bounds);
         }
     }
 

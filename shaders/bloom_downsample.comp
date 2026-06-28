@@ -13,25 +13,22 @@ void main() {
     vec2 uv = (vec2(texel) + vec2(0.5)) / vec2(dstSize);
     vec2 texelSize = 1.0 / vec2(textureSize(srcSampler, 0));
 
-    // 13-tap downsample filter (Call of Duty / UE4 style).
-    vec4 a = texture(srcSampler, uv + vec2(-1.0, -1.0) * texelSize);
-    vec4 b = texture(srcSampler, uv + vec2( 0.0, -1.0) * texelSize);
-    vec4 c = texture(srcSampler, uv + vec2( 1.0, -1.0) * texelSize);
-    vec4 d = texture(srcSampler, uv + vec2(-0.5, -0.5) * texelSize);
-    vec4 e = texture(srcSampler, uv + vec2( 0.5, -0.5) * texelSize);
-    vec4 f = texture(srcSampler, uv + vec2(-1.0,  0.0) * texelSize);
-    vec4 g = texture(srcSampler, uv + vec2( 1.0,  0.0) * texelSize);
-    vec4 h = texture(srcSampler, uv + vec2(-0.5,  0.5) * texelSize);
-    vec4 i = texture(srcSampler, uv + vec2( 0.5,  0.5) * texelSize);
-    vec4 j = texture(srcSampler, uv + vec2(-1.0,  1.0) * texelSize);
-    vec4 k = texture(srcSampler, uv + vec2( 0.0,  1.0) * texelSize);
-    vec4 l = texture(srcSampler, uv + vec2( 1.0,  1.0) * texelSize);
-    vec4 m = texture(srcSampler, uv);
+    // 5x5 Gaussian downsample filter, sigma^2 = 1.
+    const float weights[5] = float[](
+        0.054488685,
+        0.244201342,
+        0.402619947,
+        0.244201342,
+        0.054488685
+    );
 
-    vec3 result = e.rgb * 0.125;
-    result += (a.rgb + c.rgb + g.rgb + j.rgb + l.rgb) * 0.03125;
-    result += (b.rgb + d.rgb + f.rgb + h.rgb + i.rgb + k.rgb) * 0.0625;
-    result += m.rgb * 0.125;
+    vec3 result = vec3(0.0);
+    for (int y = -2; y <= 2; ++y) {
+        for (int x = -2; x <= 2; ++x) {
+            float w = weights[x + 2] * weights[y + 2];
+            result += texture(srcSampler, uv + vec2(float(x), float(y)) * texelSize).rgb * w;
+        }
+    }
 
     imageStore(outImage, texel, vec4(result, 1.0));
 }

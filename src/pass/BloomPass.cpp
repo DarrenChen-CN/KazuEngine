@@ -61,6 +61,13 @@ void BloomPass::declare(RHI* rhi, RenderGraph* rg) {
     uint32_t halfH = std::max(1u, extent.height / 2);
     m_mipLevels = computeMipLevels(halfW, halfH);
 
+    m_bloomDownHandle = rg->addTexture("BloomDown",
+        {.width  = halfW,
+         .height = halfH,
+         .mipLevels = m_mipLevels,
+         .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+         .usage  = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT});
+
     m_bloomHandle = rg->addTexture("Bloom",
         {.width  = halfW,
          .height = halfH,
@@ -72,6 +79,7 @@ void BloomPass::declare(RHI* rhi, RenderGraph* rg) {
     m_passHandle = rg->addPass("Bloom", [&](RenderGraph::PassBuilder& b) {
         b.type = RenderGraph::PassType::Compute;
         b.read(self->m_inputHDRHandle);
+        b.writeStorageImage(self->m_bloomDownHandle);
         b.writeStorageImage(self->m_bloomHandle);
         b.execute = [self](const PassExecuteContext& ctx) {
             self->execute(ctx);
@@ -83,9 +91,10 @@ void BloomPass::create(const PassCreateContext& ctx) {
     m_rhi = ctx.rhi;
     m_renderGraph = ctx.renderGraph;
 
+    m_bloomDownImage = m_renderGraph->getImage(m_bloomDownHandle);
     m_bloomImage = m_renderGraph->getImage(m_bloomHandle);
-    if (!m_bloomImage) {
-        fatalError("BloomPass: failed to get bloom image");
+    if (!m_bloomDownImage || !m_bloomImage) {
+        fatalError("BloomPass: failed to get bloom images");
     }
 
     createPipelines();
@@ -106,7 +115,7 @@ void BloomPass::createPipelines() {
     samplerInfo.maxLod = 32.0f;
     VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_sampler));
 
-    std::vector<VkDescriptorSetLayoutBinding> bindings(2);
+    std::vector<VkDescriptorSetLayoutBinding> bindings(3);
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
@@ -115,6 +124,10 @@ void BloomPass::createPipelines() {
     bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     bindings[1].descriptorCount = 1;
     bindings[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[2].binding = 2;
+    bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[2].descriptorCount = 1;
+    bindings[2].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     m_descriptorSetLayout = m_rhi->dslCache().getOrCreate(bindings);
 
@@ -156,9 +169,15 @@ void BloomPass::createPipelines() {
 void BloomPass::createDescriptorSets() {
     VkDevice device = m_rhi->ctx().device();
 
-    // Create per-mip views of the bloom image.
+    // Create per-mip views of the bloom downsample and upsample images.
+    m_downMipViews.resize(m_mipLevels);
     m_mipViews.resize(m_mipLevels);
     for (uint32_t mip = 0; mip < m_mipLevels; ++mip) {
+        m_downMipViews[mip] = m_bloomDownImage->createView({
+            VK_IMAGE_VIEW_TYPE_2D,
+            VK_FORMAT_R16G16B16A16_SFLOAT,
+            mip, 1,
+            0, 1});
         m_mipViews[mip] = m_bloomImage->createView({
             VK_IMAGE_VIEW_TYPE_2D,
             VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -176,7 +195,7 @@ void BloomPass::createDescriptorSets() {
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[0].descriptorCount = setCount;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = setCount;
+    poolSizes[1].descriptorCount = setCount * 2;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -196,12 +215,16 @@ void BloomPass::createDescriptorSets() {
     VkImageView hdrView = m_renderGraph->getImageView(m_inputHDRHandle);
 
     std::vector<VkWriteDescriptorSet> writes;
-    writes.reserve(setCount * 2);
+    writes.reserve(setCount * 3);
     std::vector<VkDescriptorImageInfo> infos;
-    infos.reserve(setCount * 2);
+    infos.reserve(setCount * 3);
 
-    auto writeSet = [&](uint32_t setIndex, VkImageView storageView, VkImageView sampledView,
-                        VkImageLayout sampledLayout) {
+    auto writeSet = [&](uint32_t setIndex,
+                        VkImageView storageView,
+                        VkImageView sampledView0,
+                        VkImageLayout sampledLayout0,
+                        VkImageView sampledView1,
+                        VkImageLayout sampledLayout1) {
         uint32_t infoBase = static_cast<uint32_t>(infos.size());
         VkDescriptorImageInfo storageInfo{};
         storageInfo.imageView = storageView;
@@ -209,11 +232,17 @@ void BloomPass::createDescriptorSets() {
         storageInfo.sampler = VK_NULL_HANDLE;
         infos.push_back(storageInfo);
 
-        VkDescriptorImageInfo sampledInfo{};
-        sampledInfo.sampler = m_sampler;
-        sampledInfo.imageView = sampledView;
-        sampledInfo.imageLayout = sampledLayout;
-        infos.push_back(sampledInfo);
+        VkDescriptorImageInfo sampledInfo0{};
+        sampledInfo0.sampler = m_sampler;
+        sampledInfo0.imageView = sampledView0;
+        sampledInfo0.imageLayout = sampledLayout0;
+        infos.push_back(sampledInfo0);
+
+        VkDescriptorImageInfo sampledInfo1{};
+        sampledInfo1.sampler = m_sampler;
+        sampledInfo1.imageView = sampledView1;
+        sampledInfo1.imageLayout = sampledLayout1;
+        infos.push_back(sampledInfo1);
 
         VkWriteDescriptorSet storageWrite{};
         storageWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -225,33 +254,53 @@ void BloomPass::createDescriptorSets() {
         storageWrite.pImageInfo = &infos[infoBase];
         writes.push_back(storageWrite);
 
-        VkWriteDescriptorSet sampledWrite{};
-        sampledWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        sampledWrite.dstSet = m_descriptorSets[setIndex];
-        sampledWrite.dstBinding = 1;
-        sampledWrite.dstArrayElement = 0;
-        sampledWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        sampledWrite.descriptorCount = 1;
-        sampledWrite.pImageInfo = &infos[infoBase + 1];
-        writes.push_back(sampledWrite);
+        VkWriteDescriptorSet sampledWrite0{};
+        sampledWrite0.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        sampledWrite0.dstSet = m_descriptorSets[setIndex];
+        sampledWrite0.dstBinding = 1;
+        sampledWrite0.dstArrayElement = 0;
+        sampledWrite0.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sampledWrite0.descriptorCount = 1;
+        sampledWrite0.pImageInfo = &infos[infoBase + 1];
+        writes.push_back(sampledWrite0);
+
+        VkWriteDescriptorSet sampledWrite1{};
+        sampledWrite1.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        sampledWrite1.dstSet = m_descriptorSets[setIndex];
+        sampledWrite1.dstBinding = 2;
+        sampledWrite1.dstArrayElement = 0;
+        sampledWrite1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        sampledWrite1.descriptorCount = 1;
+        sampledWrite1.pImageInfo = &infos[infoBase + 2];
+        writes.push_back(sampledWrite1);
     };
 
-    // Set 0: threshold - write bloom mip0, read HDR.
-    writeSet(0, m_mipViews[0], hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    // Set 0: threshold - write BloomDown mip0, read HDR.
+    writeSet(0,
+             m_downMipViews[0],
+             hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             hdrView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     uint32_t setIndex = 1;
-    // Downsample sets: write mip[i+1], read mip[i].
+    // Downsample sets: write BloomDown mip[i+1], read BloomDown mip[i].
     for (uint32_t i = 0; i + 1 < m_mipLevels; ++i) {
-        writeSet(setIndex++, m_mipViews[i + 1], m_mipViews[i], VK_IMAGE_LAYOUT_GENERAL);
+        writeSet(setIndex++,
+                 m_downMipViews[i + 1],
+                 m_downMipViews[i], VK_IMAGE_LAYOUT_GENERAL,
+                 m_downMipViews[i], VK_IMAGE_LAYOUT_GENERAL);
     }
-    // Upsample sets: write mip[i], read mip[i+1].
+    // Upsample sets indexed by output mip i: write Bloom mip[i],
+    // read current BloomDown mip[i] and accumulated previous smaller mip.
     for (uint32_t i = 0; i + 1 < m_mipLevels; ++i) {
-        writeSet(setIndex++, m_mipViews[i], m_mipViews[i + 1], VK_IMAGE_LAYOUT_GENERAL);
+        VkImageView prevView = (i + 2 == m_mipLevels) ? m_downMipViews[i + 1] : m_mipViews[i + 1];
+        writeSet(setIndex++,
+                 m_mipViews[i],
+                 m_downMipViews[i], VK_IMAGE_LAYOUT_GENERAL,
+                 prevView, VK_IMAGE_LAYOUT_GENERAL);
     }
 
     vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
-
 void BloomPass::insertComputeBarrier(VkCommandBuffer cmd) const {
     VkMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
@@ -293,8 +342,8 @@ void BloomPass::execute(const PassExecuteContext& ctx) {
         vkCmdDispatch(cmd, groupsX, groupsY, 1);
     }
 
-    if (m_mipLevels <= 1 || !m_enabled) {
-        // No blur chain needed; Tonemap will read black or just mip0.
+    if (m_mipLevels <= 1) {
+        // No blur chain needed.
         return;
     }
 
@@ -327,18 +376,20 @@ void BloomPass::execute(const PassExecuteContext& ctx) {
                            0, sizeof(BloomPush), &push);
     }
 
-    for (uint32_t i = 0; i + 1 < m_mipLevels; ++i) {
+    uint32_t upsampleSetBase = setIndex;
+    for (int32_t i = static_cast<int32_t>(m_mipLevels) - 2; i >= 0; --i) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_upsamplePipeline);
+        VkDescriptorSet set = m_descriptorSets[upsampleSetBase + static_cast<uint32_t>(i)];
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                m_pipelineLayout, 0, 1, &m_descriptorSets[setIndex++], 0, nullptr);
+                                m_pipelineLayout, 0, 1, &set, 0, nullptr);
 
-        uint32_t dstW = std::max(1u, halfSize.width >> i);
-        uint32_t dstH = std::max(1u, halfSize.height >> i);
+        uint32_t dstW = std::max(1u, halfSize.width >> static_cast<uint32_t>(i));
+        uint32_t dstH = std::max(1u, halfSize.height >> static_cast<uint32_t>(i));
         uint32_t groupsX = (dstW + 15) / 16;
         uint32_t groupsY = (dstH + 15) / 16;
         vkCmdDispatch(cmd, groupsX, groupsY, 1);
 
-        if (i + 2 < m_mipLevels) {
+        if (i > 0) {
             insertComputeBarrier(cmd);
         }
     }

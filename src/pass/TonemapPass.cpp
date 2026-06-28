@@ -49,6 +49,7 @@ void TonemapPass::declare(RHI* rhi, RenderGraph* rg) {
     m_passHandle = rg->addPass("Tonemap", [&](RenderGraph::PassBuilder& b) {
         b.type = RenderGraph::PassType::Compute;
         b.read(self->m_inputHDRHandle);
+        b.read(self->m_bloomHandle);
         b.writeStorageImage(self->m_outputLDRHandle);
         b.execute = [self](const PassExecuteContext& ctx) {
             self->execute(ctx);

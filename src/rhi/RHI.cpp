@@ -68,6 +68,15 @@ void RHI::createSyncObjects() {
 bool RHI::beginFrame(uint32_t& imageIndex) {
     m_syncObjects->waitFence(m_currentFrame);
 
+    // Recreate before acquiring. If we acquire first and then skip submit,
+    // the imageAvailable semaphore remains signaled and cannot be reused by
+    // the next vkAcquireNextImageKHR call.
+    if (m_framebufferResized) {
+        m_framebufferResized = false;
+        recreateSwapchain();
+        return false;
+    }
+
     VkResult result = m_swapchain->acquireNextImage(
         m_syncObjects->imageAvailable(m_currentFrame), imageIndex);
 
@@ -76,12 +85,6 @@ bool RHI::beginFrame(uint32_t& imageIndex) {
         return false;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         fatalError("Failed to acquire swap chain image!");
-    }
-
-    if (m_framebufferResized) {
-        m_framebufferResized = false;
-        recreateSwapchain();
-        return false;
     }
 
     m_syncObjects->resetFence(m_currentFrame);
@@ -163,3 +166,4 @@ VkCommandPool RHI::commandPool() const {
 }
 
 } // namespace kazu
+
