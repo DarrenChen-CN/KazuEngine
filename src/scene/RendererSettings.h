@@ -4,6 +4,7 @@
 
 #pragma once
 #include <string>
+#include <glm/glm.hpp>
 
 namespace kazu {
 
@@ -61,9 +62,21 @@ struct EnvironmentSettings {
     bool enabled = false;
 };
 
+struct GroundPlaneSettings {
+    bool enabled = true;
+    float size = 10.0f;
+    float y = -0.1f;
+
+    glm::vec4 baseColorFactor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
+    float metallic = 0.0f;
+    float roughness = 0.9f;
+    float ao = 1.0f;
+};
+
 struct RendererSettings {
     LightingSettings lighting;
     EnvironmentSettings environment;
+    GroundPlaneSettings groundPlane;
 };
 
 } // namespace kazu

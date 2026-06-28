@@ -118,7 +118,7 @@ private:
                       bool centerPivot = false);
     void loadGltfModel(Context& ctx, const std::string& path, float scale,
                        const glm::vec3& position = glm::vec3(0.0f), bool snapToGround = true);
-    void addGroundPlane(Context& ctx, float size = 10.0f, float y = -0.1f);
+    void addGroundPlane(Context& ctx, const GroundPlaneSettings& settings);
     void addLightVisualizers(Context& ctx, float size = 0.15f);
     void addAreaLightVisualizers(Context& ctx);
 

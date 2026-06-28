@@ -132,6 +132,32 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
         }
     }
 
+    // Parse ground plane settings
+    auto groundPlane = renderer.value("groundPlane", json::object());
+    if (!groundPlane.empty()) {
+        m_rendererSettings.groundPlane.enabled =
+            groundPlane.value("enabled", m_rendererSettings.groundPlane.enabled);
+        m_rendererSettings.groundPlane.size =
+            groundPlane.value("size", m_rendererSettings.groundPlane.size);
+        m_rendererSettings.groundPlane.y =
+            groundPlane.value("y", m_rendererSettings.groundPlane.y);
+
+        auto gpColor = groundPlane.value("baseColor",
+            std::vector<float>{0.8f, 0.8f, 0.8f, 1.0f});
+        m_rendererSettings.groundPlane.baseColorFactor = glm::vec4(
+            gpColor.empty() ? 0.8f : gpColor[0],
+            gpColor.size() < 2 ? 0.8f : gpColor[1],
+            gpColor.size() < 3 ? 0.8f : gpColor[2],
+            gpColor.size() < 4 ? 1.0f : gpColor[3]);
+
+        m_rendererSettings.groundPlane.metallic =
+            groundPlane.value("metallic", m_rendererSettings.groundPlane.metallic);
+        m_rendererSettings.groundPlane.roughness =
+            groundPlane.value("roughness", m_rendererSettings.groundPlane.roughness);
+        m_rendererSettings.groundPlane.ao =
+            groundPlane.value("ao", m_rendererSettings.groundPlane.ao);
+    }
+
     // Parse environment (IBL source)
     auto environment = j.value("environment", json::object());
     if (!environment.empty()) {
@@ -286,7 +312,7 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     spdlog::info("[Scene] Loaded {} model(s) from {}", m_instances.size(), scenePath);
 
     // Add a ground plane for shadow visualization.
-    addGroundPlane(ctx);
+    addGroundPlane(ctx, m_rendererSettings.groundPlane);
 
     bool hasLightVisualizer = false;
     for (const auto& point : m_pointLights) {
@@ -402,16 +428,17 @@ void Scene::loadObjModel(Context& ctx, const std::string& path, const glm::vec3&
     ModelInstance inst;
     inst.mesh = meshPtr;
 
-    // Ground plane is at y = -0.1. Snap the model so its lowest point touches it.
     glm::vec3 finalPosition = position;
-    if (snapToGround && meshPtr->bounds().isValid()) {
-        float minY = meshPtr->bounds().min.y;
-        finalPosition.y = -0.1f - minY * scale.y;
-    }
 
     glm::vec3 pivot(0.0f);
     if (centerPivot && meshPtr->bounds().isValid()) {
         pivot = meshPtr->bounds().center();
+    }
+
+    // Snap the model so its lowest point touches the ground plane.
+    if (snapToGround && meshPtr->bounds().isValid()) {
+        float minY = meshPtr->bounds().min.y;
+        finalPosition.y = m_rendererSettings.groundPlane.y - (minY - pivot.y) * scale.y;
     }
 
     inst.transform = glm::translate(glm::mat4(1.0f), finalPosition)
@@ -574,7 +601,7 @@ void Scene::loadGltfModel(Context& ctx, const std::string& path, float scale,
             glm::vec3 finalPosition = position;
             if (snapToGround && meshPtr->bounds().isValid()) {
                 float minY = meshPtr->bounds().min.y;
-                finalPosition.y = -0.1f - minY * scale;
+                finalPosition.y = m_rendererSettings.groundPlane.y - minY * scale;
             }
             inst.transform = glm::translate(glm::mat4(1.0f), finalPosition)
                            * glm::scale(glm::mat4(1.0f), glm::vec3(scale));
@@ -646,8 +673,14 @@ void Scene::rebuildLightViews() {
     }
 }
 
-void Scene::addGroundPlane(Context& ctx, float size, float y) {
-    const float half = size * 0.5f;
+void Scene::addGroundPlane(Context& ctx, const GroundPlaneSettings& settings) {
+    if (!settings.enabled) {
+        spdlog::info("[Scene] Ground plane disabled by scene config");
+        return;
+    }
+
+    const float half = settings.size * 0.5f;
+    const float y = settings.y;
     std::vector<Vertex> vertices = {
         {{-half, y, -half}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
         {{ half, y, -half}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
@@ -663,12 +696,13 @@ void Scene::addGroundPlane(Context& ctx, float size, float y) {
     inst.mesh = meshPtr;
     inst.transform = glm::mat4(1.0f);
     inst.pendingAlbedoMap = texturePtr;
-    inst.pendingBaseColorFactor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
-    inst.pendingMetallic = 0.0f;
-    inst.pendingRoughness = 0.9f;
+    inst.pendingBaseColorFactor = settings.baseColorFactor;
+    inst.pendingMetallic = glm::clamp(settings.metallic, 0.0f, 1.0f);
+    inst.pendingRoughness = glm::clamp(settings.roughness, 0.04f, 1.0f);
+    inst.pendingAo = glm::clamp(settings.ao, 0.0f, 1.0f);
     m_instances.push_back(inst);
 
-    spdlog::info("[Scene] Added ground plane (size={:.1f}, y={:.2f})", size, y);
+    spdlog::info("[Scene] Added ground plane (size={:.1f}, y={:.2f})", settings.size, y);
 }
 
 void Scene::addLightVisualizers(Context& ctx, float size) {
