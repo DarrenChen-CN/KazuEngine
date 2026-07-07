@@ -10,21 +10,60 @@ void main() {
     ivec2 dstSize = imageSize(dstDepth);
     if (dstCoord.x >= dstSize.x || dstCoord.y >= dstSize.y) return;
 
+    // Use the actual source-mip size, NOT dstSize*2: Vulkan mip sizes are
+    // max(1, floor(parent/2)), so an odd parent dimension makes the child half
+    // a texel short. dstSize*2 would then miss the last row/column and the
+    // min-depth pyramid would drop the nearest surface there.
+    ivec2 srcSize = textureSize(srcDepth, 0);
+
+    // mip 0 must be a 1:1 copy of the source depth buffer.  Reusing the
+    // 2x2 reduction here would sample every other texel and produce a
+    // quarter-resolution copy wrapped into the full extent.
+    if (dstSize == srcSize) {
+        imageStore(dstDepth, dstCoord, vec4(texelFetch(srcDepth, dstCoord, 0).r));
+        return;
+    }
+
     ivec2 srcCoord = dstCoord * 2;
-    ivec2 srcSize = dstSize * 2;
 
-    // Clamp sample coordinates to the source mip's valid texel centers.
-    ivec2 c0 = clamp(srcCoord, ivec2(0), srcSize - ivec2(1));
-    ivec2 c1 = clamp(srcCoord + ivec2(1, 0), ivec2(0), srcSize - ivec2(1));
-    ivec2 c2 = clamp(srcCoord + ivec2(0, 1), ivec2(0), srcSize - ivec2(1));
-    ivec2 c3 = clamp(srcCoord + ivec2(1, 1), ivec2(0), srcSize - ivec2(1));
+    // Standard 2x2 min reduction.
+    float d0 = texelFetch(srcDepth, srcCoord,               0).r;
+    float d1 = texelFetch(srcDepth, srcCoord + ivec2(1, 0), 0).r;
+    float d2 = texelFetch(srcDepth, srcCoord + ivec2(0, 1), 0).r;
+    float d3 = texelFetch(srcDepth, srcCoord + ivec2(1, 1), 0).r;
+    float minDepth = min(min(d0, d1), min(d2, d3));
 
-    // Use nearest sampling with explicit integer coordinates converted to UVs.
-    vec2 invSrcSize = 1.0 / vec2(srcSize);
-    float d0 = texelFetch(srcDepth, c0, 0).r;
-    float d1 = texelFetch(srcDepth, c1, 0).r;
-    float d2 = texelFetch(srcDepth, c2, 0).r;
-    float d3 = texelFetch(srcDepth, c3, 0).r;
+    // When a source dimension is odd, the naive 2x2 leaves the trailing
+    // row/column uncovered. Fold in the extra edge texels so every source
+    // texel contributes to some destination texel.
+    bool oddX = (srcSize.x & 1) != 0;
+    bool oddY = (srcSize.y & 1) != 0;
 
-    imageStore(dstDepth, dstCoord, vec4(min(min(d0, d1), min(d2, d3))));
+    if (oddX) {
+        bool hasRightCol = (dstCoord.x * 2 + 2) < srcSize.x;
+        if (hasRightCol) {
+            float e0 = texelFetch(srcDepth, srcCoord + ivec2(2, 0), 0).r;
+            float e1 = texelFetch(srcDepth, srcCoord + ivec2(2, 1), 0).r;
+            minDepth = min(minDepth, min(e0, e1));
+        }
+    }
+    if (oddY) {
+        bool hasBottomRow = (dstCoord.y * 2 + 2) < srcSize.y;
+        if (hasBottomRow) {
+            float e0 = texelFetch(srcDepth, srcCoord + ivec2(0, 2), 0).r;
+            float e1 = texelFetch(srcDepth, srcCoord + ivec2(1, 2), 0).r;
+            minDepth = min(minDepth, min(e0, e1));
+        }
+    }
+    if (oddX && oddY) {
+        bool hasRightCol = (dstCoord.x * 2 + 2) < srcSize.x;
+        bool hasBottomRow = (dstCoord.y * 2 + 2) < srcSize.y;
+        if (hasRightCol && hasBottomRow) {
+            float e = texelFetch(srcDepth, srcCoord + ivec2(2, 2), 0).r;
+            minDepth = min(minDepth, e);
+        }
+    }
+
+    imageStore(dstDepth, dstCoord, vec4(minDepth));
 }
+

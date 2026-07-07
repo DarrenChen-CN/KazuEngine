@@ -11,6 +11,8 @@ layout(set = 0, binding = 3) uniform sampler2D aoSampler;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
+    mat4 model;
+    mat4 normalMatrix;
     vec4 baseColorFactor;
     vec4 materialParams; // x = metallic, y = roughness, z = ao
 } pc;

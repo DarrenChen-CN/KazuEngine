@@ -31,6 +31,8 @@ class TonemapPass;
 class FXAAPass;
 class HiZPass;
 class SSRPass;
+class SSRBlurHPass;
+class SSRCompositePass;
 class TAAPass;
 class BloomPass;
 class Image;
@@ -86,6 +88,8 @@ private:
     std::unique_ptr<TonemapPass>  m_tonemapPass;
     std::unique_ptr<HiZPass>      m_hizPass;
     std::unique_ptr<SSRPass>      m_ssrPass;
+    std::unique_ptr<SSRBlurHPass> m_ssrBlurHPass;
+    std::unique_ptr<SSRCompositePass> m_ssrCompositePass;
     std::unique_ptr<TAAPass>      m_taaPass;
     std::unique_ptr<BloomPass>    m_bloomPass;
     std::unique_ptr<FXAAPass>     m_fxaaPass;
@@ -104,9 +108,17 @@ private:
     RenderGraph::ResourceHandle m_swapchainHandle = RenderGraph::InvalidResource;
     bool m_lightingSettingsInitialized = false;
 
-    bool m_ssrEnabled = true;
-    int  m_ssrDisplayMode = 0; // 0 = composite, 1 = reflection only, 2 = hit mask
-    int  m_ssrTraceMode = 1;   // 0 = basic, 1 = binary, 2 = Hi-Z
+    bool  m_ssrEnabled = true;
+    int   m_ssrDisplayMode = 0; // 0 = composite, 1 = reflection only, 2 = hit mask, 3 = thickness, 4 = raw depth, 5 = hiz mip
+    int   m_ssrTraceMode = 1;   // 0 = basic, 1 = DDA, 2 = Hi-Z
+    float m_ssrMaxDistance = 10.0f;
+    float m_ssrStride = 30.0f;
+    float m_ssrThickness = 0.01f;
+    int   m_ssrStepCount = 12;
+    int   m_ssrBinarySearchSteps = 6;
+    bool  m_ssrJitterEnabled = true;
+    int   m_ssrHizVisMip = 0;
+    float m_ssrBlurRadius = 1.0f;
 
     // Per-trace-mode rolling-average CPU frame time for the efficiency panel.
     double m_lastFrameTime = 0.0;

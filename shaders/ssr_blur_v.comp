@@ -1,0 +1,52 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outSceneColor;
+layout(set = 0, binding = 1) uniform sampler2D inBlurredH;
+layout(set = 0, binding = 2) uniform sampler2D sceneColorSampler;
+
+layout(push_constant) uniform PushConstants {
+    vec2 screenSize;
+    float radius;
+    int displayMode;
+} pc;
+
+void main() {
+    ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outSceneColor);
+    if (texel.x >= size.x || texel.y >= size.y) return;
+
+    vec2 uv = (vec2(texel) + 0.5) / vec2(size);
+    vec2 texelSize = 1.0 / pc.screenSize;
+
+    vec3 sceneColor = texture(sceneColorSampler, uv).rgb;
+
+    // 5-tap vertical Gaussian blur (same kernel as the horizontal pass).
+    const float weights[5] = float[](0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+
+    vec4 reflected = vec4(0.0);
+    float weightSum = 0.0;
+    for (int i = -4; i <= 4; ++i) {
+        float w = weights[abs(i)];
+        vec2 sampleUV = uv + vec2(0.0, float(i) * pc.radius * texelSize.y);
+        reflected += texture(inBlurredH, sampleUV) * w;
+        weightSum += w;
+    }
+    reflected /= weightSum;
+
+    vec3 outputColor = sceneColor;
+    if (pc.displayMode == 0) {
+        // Composite: reflected color is pre-multiplied by Fresnel, alpha is the blend weight.
+        outputColor = mix(sceneColor, reflected.rgb, reflected.a);
+    } else if (pc.displayMode == 1) {
+        outputColor = reflected.rgb;
+    } else if (pc.displayMode == 2) {
+        outputColor = vec3(reflected.a);
+    } else {
+        // Debug modes 3/4/5: SSRPass already wrote the debug view into rgb.
+        outputColor = reflected.rgb;
+    }
+
+    imageStore(outSceneColor, texel, vec4(outputColor, 1.0));
+}

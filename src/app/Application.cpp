@@ -111,7 +111,7 @@ bool Application::init(const std::string& scenePath) {
     glfwSetFramebufferSizeCallback(m_window, framebufferResizeCallback);
 
     m_rhi = std::make_unique<RHI>();
-    m_rhi->init(m_window);
+    m_rhi->init(m_window, UI_PANEL_WIDTH);
 
     // 05-00e-6 validation: cubemap + mip chain + per-mip view.
     smokeTestCubemapMip(m_rhi.get());
@@ -141,11 +141,15 @@ bool Application::init(const std::string& scenePath) {
 
     const auto& cfg = m_scene->config();
     if (cfg.windowWidth != m_windowWidth || cfg.windowHeight != m_windowHeight) {
+        // The config stores the desired rendering resolution; the actual window
+        // must also accommodate the left-side UI panel.
+        uint32_t totalWidth = cfg.windowWidth + UI_PANEL_WIDTH;
+        uint32_t totalHeight = cfg.windowHeight;
         glfwSetWindowSize(m_window,
-            static_cast<int>(cfg.windowWidth),
-            static_cast<int>(cfg.windowHeight));
-        m_windowWidth = cfg.windowWidth;
-        m_windowHeight = cfg.windowHeight;
+            static_cast<int>(totalWidth),
+            static_cast<int>(totalHeight));
+        m_windowWidth = totalWidth;
+        m_windowHeight = totalHeight;
     }
 
     m_camera = std::make_unique<Camera>();

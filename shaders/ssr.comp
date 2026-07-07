@@ -2,254 +2,557 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outSceneColor;
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outSSR;
 layout(set = 0, binding = 1) uniform sampler2D sceneColorSampler;
 layout(set = 0, binding = 2) uniform sampler2D depthSampler;
 layout(set = 0, binding = 3) uniform sampler2D normalSampler;
 layout(set = 0, binding = 4) uniform sampler2D materialSampler;
-layout(set = 0, binding = 5) uniform sampler2D hizSampler;
+layout(set = 0, binding = 5) uniform sampler2D albedoSampler;
+layout(set = 0, binding = 6) uniform sampler2D hizSampler;
 
-layout(set = 0, binding = 6) buffer StepStats {
+layout(set = 0, binding = 7) buffer StepStats {
     uint totalSteps;
     uint totalPixels;
 } stepStats;
 
 layout(push_constant) uniform PushConstants {
-    mat4  viewProj;
-    mat4  invViewProj;
-    vec4  cameraPos;
-    vec4  params;      // x = maxSteps, y = stepSize, z = thickness, w = roughnessScale
+    mat4  proj;
+    mat4  invProj;
+    mat4  view;
+    vec4  params;      // x = maxDistance, y = stridePixels, z = thickness, w = stepCount
     vec2  screenSize;
     int   displayMode;
-    int   traceMode;   // 0 = basic fixed-step, 1 = fixed-step + binary, 2 = Hi-Z
+    int   traceMode;   // 0 = basic fixed-step, 1 = screen-space DDA, 2 = Hi-Z
     int   hizMaxMip;
     int   enabled;     // 0 = bypass SSR, 1 = run SSR
+    int   binarySearchSteps; // outer binary iterations
+    int   jitterEnabled;
+    int   hizVisMip;
 } pc;
 
-vec3 reconstructWorldPos(vec2 ndc, float depth) {
+vec3 reconstructViewPos(vec2 ndc, float depth) {
     vec4 clip = vec4(ndc, depth, 1.0);
-    vec4 world = pc.invViewProj * clip;
-    return world.xyz / world.w;
+    vec4 view = pc.invProj * clip;
+    return view.xyz / view.w;
 }
 
-// Returns true and writes reflectedColor/hitMask/stepCount if a hit is found.
-bool traceRayBasic(vec3 origin, vec3 dir, out vec3 reflectedColor, out float hitMask, inout int stepCount) {
-    reflectedColor = vec3(0.0);
-    hitMask = 0.0;
+vec3 projectViewPos(vec3 viewPos, out vec3 ndc) {
+    vec4 clip = pc.proj * vec4(viewPos, 1.0);
+    ndc = clip.xyz / clip.w;
+    return vec3(ndc.xy * 0.5 + 0.5, ndc.z);
+}
 
-    float bias = pc.params.y * 0.5;
-    vec3 rayPos = origin + dir * bias;
-    float stepSize = pc.params.y;
-    int maxSteps = int(pc.params.x);
+float viewDepthFromRawDepth(vec2 uv, float rawDepth) {
+    vec2 ndc = uv * 2.0 - 1.0;
+    return -reconstructViewPos(ndc, rawDepth).z;
+}
 
-    for (int i = 0; i < maxSteps; ++i) {
+bool isHitAtDepth(float rayDepth, float sceneDepth) {
+    float thickness = pc.params.z;
+    return rayDepth > sceneDepth && rayDepth < sceneDepth + thickness;
+}
+
+// Inner full raymarch used by the DDA/binary-search path.
+// Returns true when the ray crosses behind the depth buffer.
+// On success hitUV and thicknessRatio are written, and P/Q/K/preZ are left
+// at the hit point so the caller can step back from it.
+bool screenSpaceRayMarching(
+    inout vec2 P, inout vec3 Q, inout float K,
+    inout float preZ,
+    vec2 dP, vec3 dQ, float dK,
+    int maxSteps,
+    float endX, float dir, bool permute,
+    inout int stepCount,
+    out vec2 hitUV,
+    out float thicknessRatio)
+{
+    for (int i = 0; i < maxSteps && P.x * dir <= endX; ++i) {
         stepCount++;
-        rayPos += dir * stepSize;
+        P += dP;
+        Q += dQ;
+        K += dK;
+        if (abs(K) < 1e-5) return false;
 
-        vec4 clip = pc.viewProj * vec4(rayPos, 1.0);
-        vec3 ndcRay = clip.xyz / clip.w;
-        vec2 rayUV = ndcRay.xy * 0.5 + 0.5;
+        float rayZMin = preZ;
+        float rayZMax = -(dQ.z * 0.5 + Q.z) / (dK * 0.5 + K);
+        preZ = rayZMax;
+        if (rayZMin > rayZMax) {
+            float tmp = rayZMin; rayZMin = rayZMax; rayZMax = tmp;
+        }
 
-        if (any(lessThan(rayUV, vec2(0.0))) || any(greaterThan(rayUV, vec2(1.0))))
+        vec2 sampleP = permute ? P.yx : P;
+        hitUV = sampleP / pc.screenSize;
+        if (any(lessThan(hitUV, vec2(0.0))) || any(greaterThan(hitUV, vec2(1.0))))
             return false;
 
-        float sceneDepth = texture(depthSampler, rayUV).r;
-        if (ndcRay.z > sceneDepth) {
-            reflectedColor = texture(sceneColorSampler, rayUV).rgb;
-            hitMask = 1.0;
+        vec3 currNdc;
+        projectViewPos(Q / K, currNdc);
+        if (currNdc.z < 0.0 || currNdc.z > 1.0) return false;
+
+        float sceneDepth = viewDepthFromRawDepth(hitUV, texture(depthSampler, hitUV).r);
+
+        // Adaptive thickness (UE-style): thickness grows linearly with scene depth,
+        // with a tiny absolute bias to avoid misses on very nearby surfaces.
+        float thickness = pc.params.z * sceneDepth + 0.02;
+
+        bool crossedBehind = rayZMax >= sceneDepth + 0.01;
+        if (crossedBehind) {
+            // Same acceptance logic as Hi-Z level-0: the segment must cross the
+            // surface and the NEAR endpoint (rayZMin) must be within the surface
+            // thickness. We do not interpolate here; Hi-Z simply samples at the
+            // current step and backtracks when behind.
+            float depthDistance = abs(sceneDepth - rayZMin);
+            thicknessRatio = clamp(depthDistance / max(thickness, 1e-5), 0.0, 1.0);
             return true;
         }
     }
     return false;
 }
 
-bool traceRayBinary(vec3 origin, vec3 dir, out vec3 reflectedColor, out float hitMask, inout int stepCount) {
-    reflectedColor = vec3(0.0);
-    hitMask = 0.0;
-
-    float bias = pc.params.y * 0.5;
-    float stepSize = pc.params.y;
-    int maxSteps = int(pc.params.x);
-
-    vec3 prevPos = origin + dir * bias;
-    vec3 currPos = prevPos;
-
-    for (int i = 0; i < maxSteps; ++i) {
-        stepCount++;
-        prevPos = currPos;
-        currPos += dir * stepSize;
-
-        vec4 clip = pc.viewProj * vec4(currPos, 1.0);
-        vec3 ndcRay = clip.xyz / clip.w;
-        vec2 rayUV = ndcRay.xy * 0.5 + 0.5;
-
-        if (any(lessThan(rayUV, vec2(0.0))) || any(greaterThan(rayUV, vec2(1.0))))
-            return false;
-
-        float sceneDepth = texture(depthSampler, rayUV).r;
-        if (ndcRay.z > sceneDepth) {
-            // Binary search between prevPos (in front) and currPos (behind).
-            vec3 p0 = prevPos;
-            vec3 p1 = currPos;
-            for (int j = 0; j < 8; ++j) {
-                stepCount++;
-                vec3 mid = (p0 + p1) * 0.5;
-                vec4 midClip = pc.viewProj * vec4(mid, 1.0);
-                vec3 midNdc = midClip.xyz / midClip.w;
-                vec2 midUV = midNdc.xy * 0.5 + 0.5;
-                float midDepth = texture(depthSampler, midUV).r;
-                if (midNdc.z > midDepth) {
-                    p1 = mid;
-                } else {
-                    p0 = mid;
-                }
-            }
-
-            vec3 finalPos = (p0 + p1) * 0.5;
-            vec4 finalClip = pc.viewProj * vec4(finalPos, 1.0);
-            vec2 finalUV = finalClip.xy / finalClip.w * 0.5 + 0.5;
-            reflectedColor = texture(sceneColorSampler, finalUV).rgb;
-            hitMask = 1.0;
-            return true;
-        }
-    }
-    return false;
+// Bayer 4x4 dither matrix, same ordering as the Zhihu article.
+float bayerDither(ivec2 p) {
+    int x = p.x & 3;
+    int y = p.y & 3;
+    float dither[16] = float[](
+        0.0,   0.5,   0.125, 0.625,
+        0.75,  0.25,  0.875, 0.375,
+        0.187, 0.687, 0.0625,0.562,
+        0.937, 0.437, 0.812, 0.312
+    );
+    return dither[x + y * 4];
 }
 
-bool traceRayHiZ(vec3 origin, vec3 dir, out vec3 reflectedColor, out float hitMask, inout int stepCount) {
+// Article-style first pass: trace in view/camera space, keeping the GBuffer in world space.
+bool traceRayBasic(vec3 originView, vec3 dirView, out vec3 reflectedColor, out float hitMask, out float thicknessRatio, inout int stepCount) {
     reflectedColor = vec3(0.0);
     hitMask = 0.0;
+    thicknessRatio = 0.0;
 
-    float baseStep = pc.params.y;
-    float step = baseStep;
-    int level = 0;
-    int maxMip = pc.hizMaxMip;
-    int maxSteps = int(pc.params.x);
+    float maxDistance = pc.params.x;
+    float stride = max(pc.params.y, 1.0);
+    int maxSteps = int(pc.params.w);
+    float nearPlane = 0.1;
+    float bias = 0.02;
 
-    float bias = baseStep * 0.5;
-    vec3 prevPos = origin + dir * bias;
-    vec3 currPos = prevPos;
+    vec3 startView = originView + dirView * bias;
+    float distance = maxDistance;
+    if (dirView.z > 0.0) {
+        float nearDistance = (-nearPlane - startView.z) / dirView.z;
+        distance = min(distance, max(nearDistance, 0.0));
+    }
+    if (distance <= 0.0) return false;
 
-    for (int i = 0; i < maxSteps; ++i) {
+    vec3 endView = startView + dirView * distance;
+
+    vec4 startClip = pc.proj * vec4(startView, 1.0);
+    vec4 endClip = pc.proj * vec4(endView, 1.0);
+    if (abs(startClip.w) < 1e-5 || abs(endClip.w) < 1e-5) return false;
+
+    float startK = 1.0 / startClip.w;
+    float endK = 1.0 / endClip.w;
+
+    vec2 startScreen = (startClip.xy * startK * 0.5 + 0.5) * pc.screenSize;
+    vec2 endScreen = (endClip.xy * endK * 0.5 + 0.5) * pc.screenSize;
+
+    vec3 startQ = startView * startK;
+    vec3 endQ = endView * endK;
+
+    vec2 diff = endScreen - startScreen;
+    bool permute = false;
+    if (abs(diff.x) < abs(diff.y)) {
+        permute = true;
+        diff = diff.yx;
+        startScreen = startScreen.yx;
+        endScreen = endScreen.yx;
+    }
+
+    if (abs(diff.x) < 1e-5) return false;
+
+    float dir = sign(diff.x);
+    float invdx = dir / diff.x;
+    vec2 dP = vec2(dir, diff.y * invdx);
+    vec3 dQ = (endQ - startQ) * invdx;
+    float dK = (endK - startK) * invdx;
+
+    dP *= stride;
+    dQ *= stride;
+    dK *= stride;
+
+    vec2 P = startScreen;
+    vec3 Q = startQ;
+    float K = startK;
+    float preZ = -startView.z;
+    vec2 hitUV = vec2(0.0);
+    float endX = endScreen.x * dir;
+
+    // Pure linear screen-space raymarch (no binary refinement, no jitter).
+    for (int i = 0; i < maxSteps && P.x * dir <= endX; ++i) {
         stepCount++;
-        prevPos = currPos;
-        currPos += dir * step;
 
-        vec4 clip = pc.viewProj * vec4(currPos, 1.0);
-        vec3 ndcRay = clip.xyz / clip.w;
-        vec2 rayUV = ndcRay.xy * 0.5 + 0.5;
+        P += dP;
+        Q += dQ;
+        K += dK;
+        if (abs(K) < 1e-5) return false;
 
-        if (any(lessThan(rayUV, vec2(0.0))) || any(greaterThan(rayUV, vec2(1.0)))
-            || ndcRay.z < 0.0 || ndcRay.z > 1.0)
+        float rayZMin = preZ;
+        float rayZMax = -(dQ.z * 0.5 + Q.z) / (dK * 0.5 + K);
+        preZ = rayZMax;
+        if (rayZMin > rayZMax) {
+            float tmp = rayZMin; rayZMin = rayZMax; rayZMax = tmp;
+        }
+
+        vec2 sampleP = permute ? P.yx : P;
+        hitUV = sampleP / pc.screenSize;
+        if (any(lessThan(hitUV, vec2(0.0))) || any(greaterThan(hitUV, vec2(1.0))))
             return false;
 
-        float sceneDepth = textureLod(hizSampler, rayUV, level).r;
+        vec3 currNdc;
+        projectViewPos(Q / K, currNdc);
+        if (currNdc.z < 0.0 || currNdc.z > 1.0) return false;
 
-        if (ndcRay.z > sceneDepth) {
-            // Potential hit at this mip level.
-            if (level == 0) {
-                // Binary search to refine the intersection.
-                vec3 p0 = prevPos;
-                vec3 p1 = currPos;
-                for (int j = 0; j < 8; ++j) {
-                    stepCount++;
-                    vec3 mid = (p0 + p1) * 0.5;
-                    vec4 midClip = pc.viewProj * vec4(mid, 1.0);
-                    vec3 midNdc = midClip.xyz / midClip.w;
-                    vec2 midUV = midNdc.xy * 0.5 + 0.5;
-                    float midDepth = textureLod(hizSampler, midUV, 0).r;
-                    if (midNdc.z > midDepth) {
-                        p1 = mid;
-                    } else {
-                        p0 = mid;
-                    }
-                }
+        float sceneDepth = viewDepthFromRawDepth(hitUV, texture(depthSampler, hitUV).r);
 
-                vec3 finalPos = (p0 + p1) * 0.5;
-                vec4 finalClip = pc.viewProj * vec4(finalPos, 1.0);
-                vec2 finalUV = finalClip.xy / finalClip.w * 0.5 + 0.5;
-                reflectedColor = texture(sceneColorSampler, finalUV).rgb;
+        // Adaptive thickness (UE-style).
+        float thickness = pc.params.z * sceneDepth + 0.02;
+
+        bool isBehind = rayZMin >= sceneDepth + 0.01;
+        if (isBehind) {
+            float depthDistance = abs(sceneDepth - rayZMax);
+            if (depthDistance < thickness) {
+                reflectedColor = texture(sceneColorSampler, hitUV).rgb;
                 hitMask = 1.0;
+                thicknessRatio = clamp(depthDistance / max(thickness, 1e-5), 0.0, 1.0);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool traceRayDDA(vec3 originView, vec3 dirView, out vec3 reflectedColor, out float hitMask, out float thicknessRatio, inout int stepCount) {
+    reflectedColor = vec3(0.0);
+    hitMask = 0.0;
+    thicknessRatio = 0.0;
+
+    float maxDistance = pc.params.x;
+    float stride = max(pc.params.y, 1.0);
+    int innerSteps = int(pc.params.w);
+    int binaryCount = pc.binarySearchSteps;
+    float nearPlane = 0.1;
+    float bias = 0.02;
+
+    vec3 startView = originView + dirView * bias;
+    float distance = maxDistance;
+    if (dirView.z > 0.0) {
+        float nearDistance = (-nearPlane - startView.z) / dirView.z;
+        distance = min(distance, max(nearDistance, 0.0));
+    }
+    if (distance <= 0.0) return false;
+
+    vec3 endView = startView + dirView * distance;
+
+    vec4 startClip = pc.proj * vec4(startView, 1.0);
+    vec4 endClip = pc.proj * vec4(endView, 1.0);
+    if (abs(startClip.w) < 1e-5 || abs(endClip.w) < 1e-5) return false;
+
+    float startK = 1.0 / startClip.w;
+    float endK = 1.0 / endClip.w;
+
+    vec2 startScreen = (startClip.xy * startK * 0.5 + 0.5) * pc.screenSize;
+    vec2 endScreen = (endClip.xy * endK * 0.5 + 0.5) * pc.screenSize;
+
+    vec3 startQ = startView * startK;
+    vec3 endQ = endView * endK;
+
+    vec2 diff = endScreen - startScreen;
+    bool permute = false;
+    if (abs(diff.x) < abs(diff.y)) {
+        permute = true;
+        diff = diff.yx;
+        startScreen = startScreen.yx;
+        endScreen = endScreen.yx;
+    }
+
+    if (abs(diff.x) < 1e-5) return false;
+
+    float dir = sign(diff.x);
+    float invdx = dir / diff.x;
+    vec2 dP = vec2(dir, diff.y * invdx);
+    vec3 dQ = (endQ - startQ) * invdx;
+    float dK = (endK - startK) * invdx;
+
+    vec2 P = startScreen;
+    vec3 Q = startQ;
+    float K = startK;
+    float preZ = -startView.z;
+    float endX = endScreen.x * dir;
+
+    float currentStride = stride;
+    vec2 dPCurrent = dP * currentStride;
+    vec3 dQCurrent = dQ * currentStride;
+    float dKCurrent = dK * currentStride;
+
+    // Zhihu-style binary raymarching: outer loop halves the stride each
+    // iteration; inner loop does a full forward march with the current stride.
+    // Jitter is applied ONLY on the first (coarsest) outer iteration, before
+    // the inner march begins. Re-jittering on every refinement level prevents
+    // the binary search from converging and produces visible streaking.
+    for (int b = 0; b < binaryCount; ++b) {
+        if (pc.jitterEnabled != 0 && currentStride > 1.0) {
+            float jitter = bayerDither(ivec2(P));
+            P += dPCurrent * jitter;
+            Q += dQCurrent * jitter;
+            K += dKCurrent * jitter;
+        }
+
+        vec2 uv;
+        float ratio;
+        vec2 marchP = P;
+        vec3 marchQ = Q;
+        float marchK = K;
+        float marchPreZ = preZ;
+
+        if (screenSpaceRayMarching(marchP, marchQ, marchK, marchPreZ,
+                                   dPCurrent, dQCurrent, dKCurrent,
+                                   innerSteps, endX, dir, permute,
+                                   stepCount, uv, ratio)) {
+            if (b == binaryCount - 1) {
+                // Mirror Hi-Z level-0 acceptance: only finalize the hit if the
+                // NEAR endpoint is actually within the surface thickness.
+                if (ratio >= 1.0)
+                    return false;
+
+                reflectedColor = texture(sceneColorSampler, uv).rgb;
+                hitMask = 1.0;
+                thicknessRatio = ratio;
                 return true;
             }
 
-            // Refine by going down one mip level and stepping back.
-            level--;
-            currPos = prevPos;
-            step *= 0.5;
-        } else {
-            // No intersection: advance, and move to a coarser mip if one step
-            // covers more than two texels at the current level.
-            vec4 nextClip = pc.viewProj * vec4(currPos + dir * step, 1.0);
-            vec2 nextUV = nextClip.xy / nextClip.w * 0.5 + 0.5;
-            float pixelDist = length((nextUV - rayUV) * pc.screenSize);
-            float texelSize = float(1 << level);
+            // Step back from the hit position and halve the stride.
+            P = marchP - dPCurrent;
+            Q = marchQ - dQCurrent;
+            K = marchK - dKCurrent;
+            preZ = -Q.z / K;
 
-            if (pixelDist > texelSize * 2.0 && level < maxMip) {
-                level++;
-                step *= 2.0;
+            currentStride *= 0.5;
+            dPCurrent = dP * currentStride;
+            dQCurrent = dQ * currentStride;
+            dKCurrent = dK * currentStride;
+        } else {
+            return false;
+        }
+    }
+
+    return false;
+}
+
+
+bool traceRayHiZ(vec3 originView, vec3 dirView, out vec3 reflectedColor, out float hitMask, out float thicknessRatio, inout int stepCount) {
+    reflectedColor = vec3(0.0);
+    hitMask = 0.0;
+    thicknessRatio = 0.0;
+
+    float maxDistance = pc.params.x;
+    int maxSteps = int(pc.params.w);
+    int maxMip = min(pc.hizMaxMip, 4);  // limit coarsest level to reduce streaking
+    float nearPlane = 0.1;
+
+    // Adaptive thickness: scale the world-space tolerance by the pixel's view depth.
+    float thickness = pc.params.z * max(-originView.z, 1.0);
+
+    // Start the ray a small distance along the reflection direction to avoid
+    // immediately re-intersecting the surface we are reflecting from.
+    float bias = 0.02;
+    vec3 startView = originView + dirView * bias;
+
+    // Near-plane clip.
+    float distance = maxDistance;
+    if (dirView.z > 0.0) {
+        float nearDist = (-nearPlane - startView.z) / dirView.z;
+        distance = min(distance, max(nearDist, 0.0));
+    }
+    if (distance <= 0.0) return false;
+
+    vec3 endView = startView + dirView * distance;
+
+    // Homogeneous screen-space line setup (same as the DDA).
+    vec4 startClip = pc.proj * vec4(startView, 1.0);
+    vec4 endClip = pc.proj * vec4(endView, 1.0);
+    if (abs(startClip.w) < 1e-5 || abs(endClip.w) < 1e-5) return false;
+
+    float startK = 1.0 / startClip.w;
+    float endK = 1.0 / endClip.w;
+
+    vec2 startScreen = (startClip.xy * startK * 0.5 + 0.5) * pc.screenSize;
+    vec2 endScreen = (endClip.xy * endK * 0.5 + 0.5) * pc.screenSize;
+
+    // Use startView (after bias) for the homogeneous interpolation, matching the
+    // Zhihu article and the DDA/Basic paths.
+    vec3 startQ = startView * startK;
+    vec3 endQ = endView * endK;
+
+    vec2 diff = endScreen - startScreen;
+    bool permute = false;
+    if (abs(diff.x) < abs(diff.y)) {
+        permute = true;
+        diff = diff.yx;
+        startScreen = startScreen.yx;
+        endScreen = endScreen.yx;
+    }
+
+    if (abs(diff.x) < 1e-5) return false;
+
+    float dir = sign(diff.x);
+    float invdx = dir / diff.x;
+    vec2 dP = vec2(dir, diff.y * invdx);   // one-pixel step along dominant axis
+    vec3 dQ = (endQ - startQ) * invdx;
+    float dK = (endK - startK) * invdx;
+
+    vec2 P = startScreen;
+    vec3 Q = startQ;
+    float K = startK;
+
+    // Track the previous midpoint depth in POSITIVE view-space distance.
+    float preZ = -startView.z;
+    vec2 hitUV = vec2(0.0);
+    float endX = endScreen.x * dir;
+
+    int level = 0;
+
+    for (int i = 0; i < maxSteps && P.x * dir <= endX; ++i) {
+        stepCount++;
+
+        float cellSize = exp2(float(level));
+        P += dP * cellSize;
+        Q += dQ * cellSize;
+        K += dK * cellSize;
+
+        if (abs(K) < 1e-5) return false;
+
+        float rayZMin = preZ;
+        // Article-style midpoint depth for this step.
+        float rayZMax = -(dQ.z * cellSize * 0.5 + Q.z) / (dK * cellSize * 0.5 + K);
+        preZ = rayZMax;              // track current midpoint BEFORE swap
+        if (rayZMin > rayZMax) {
+            float tmp = rayZMin; rayZMin = rayZMax; rayZMax = tmp;
+        }
+
+        vec2 sampleP = permute ? P.yx : P;
+        hitUV = sampleP / pc.screenSize;
+        if (any(lessThan(hitUV, vec2(0.0))) || any(greaterThan(hitUV, vec2(1.0))))
+            return false;
+
+        vec3 currNdc;
+        projectViewPos(Q / K, currNdc);
+        if (currNdc.z < 0.0 || currNdc.z > 1.0) return false;
+
+        float sceneDepth = viewDepthFromRawDepth(hitUV, textureLod(hizSampler, hitUV, level).r);
+
+        // Adaptive thickness (UE-style): thickness grows linearly with scene depth,
+        // with a tiny absolute bias to avoid misses on very nearby surfaces.
+        float thickness = pc.params.z * sceneDepth + 0.02;
+
+        // Zhihu-style Hi-Z test: the segment is behind the surface only when its
+        // FARTHEST point (rayZMax in positive-depth convention) reaches the surface.
+        bool behind = rayZMax >= sceneDepth + 0.01;
+
+        if (!behind) {
+            // Entirely in front: safe to advance, try coarser next iteration.
+            if (level < maxMip) level++;
+        } else {
+            if (level == 0) {
+                // Zhihu-style level-0 hit test: closest point within thickness.
+                float depthDistance = abs(sceneDepth - rayZMin);
+                if (depthDistance < thickness) {
+                    reflectedColor = texture(sceneColorSampler, hitUV).rgb;
+                    hitMask = 1.0;
+                    thicknessRatio = clamp(depthDistance / max(thickness, 1e-5), 0.0, 1.0);
+                    return true;
+                }
+                // Level 0 but not within thickness: continue marching.
+            } else {
+                // Backtrack and descend to a finer level.
+                P -= dP * cellSize;
+                Q -= dQ * cellSize;
+                K -= dK * cellSize;
+                preZ = -Q.z / K;  // keep preZ in positive-depth convention
+                level--;
             }
         }
     }
+
     return false;
 }
 
 void main() {
     ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(outSceneColor);
+    ivec2 size = imageSize(outSSR);
     if (texel.x >= size.x || texel.y >= size.y) return;
 
     vec2 uv = (vec2(texel) + 0.5) / vec2(size);
     vec2 ndc = uv * 2.0 - 1.0;
 
-    vec3 sceneColor = texture(sceneColorSampler, uv).rgb;
     float depth = texture(depthSampler, uv).r;
 
     // Background / sky: no reflection.
     if (depth >= 1.0 || pc.enabled == 0) {
-        imageStore(outSceneColor, texel, vec4(sceneColor, 1.0));
+        imageStore(outSSR, texel, vec4(0.0));
         return;
     }
 
-    vec3 worldPos = reconstructWorldPos(ndc, depth);
-    vec3 normal = normalize(texture(normalSampler, uv).rgb * 2.0 - 1.0);
+    vec3 viewPos = reconstructViewPos(ndc, depth);
+    vec3 worldNormal = normalize(texture(normalSampler, uv).rgb * 2.0 - 1.0);
+    vec3 viewNormal = normalize((pc.view * vec4(worldNormal, 0.0)).xyz);
 
+    vec3 baseColor = texture(albedoSampler, uv).rgb;
     vec4 material = texture(materialSampler, uv);
     float metallic = material.r;
     float roughness = material.g;
 
-    vec3 V = normalize(pc.cameraPos.xyz - worldPos);
-    vec3 R = reflect(-V, normal);
+    vec3 V = normalize(-viewPos);
+    vec3 rayDir = normalize(reflect(-V, viewNormal));
 
-    float cosTheta = max(dot(normal, V), 0.0);
-    float fresnel = pow(1.0 - cosTheta, 5.0);
-    float specularWeight = metallic * (1.0 - roughness) * (0.04 + 0.96 * fresnel);
+    float cosTheta = max(dot(viewNormal, V), 0.0);
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+    vec3 F = clamp(F0 + (vec3(1.0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0), vec3(0.0), vec3(1.0));
 
     vec3 reflectedColor = vec3(0.0);
     float hitMask = 0.0;
+    float thicknessRatio = 0.0;
     int stepCount = 0;
 
     if (pc.traceMode == 0) {
-        traceRayBasic(worldPos, R, reflectedColor, hitMask, stepCount);
+        traceRayBasic(viewPos, rayDir, reflectedColor, hitMask, thicknessRatio, stepCount);
     } else if (pc.traceMode == 1) {
-        traceRayBinary(worldPos, R, reflectedColor, hitMask, stepCount);
+        traceRayDDA(viewPos, rayDir, reflectedColor, hitMask, thicknessRatio, stepCount);
     } else {
-        traceRayHiZ(worldPos, R, reflectedColor, hitMask, stepCount);
+        traceRayHiZ(viewPos, rayDir, reflectedColor, hitMask, thicknessRatio, stepCount);
     }
 
     atomicAdd(stepStats.totalSteps, uint(stepCount));
     atomicAdd(stepStats.totalPixels, 1u);
 
-    vec3 outputColor = sceneColor;
-    if (hitMask > 0.0) {
-        outputColor = mix(sceneColor, reflectedColor, specularWeight * hitMask);
-    }
+    // Output the reflection contribution pre-multiplied by Fresnel.
+    // RGB = reflected color * F, A = blend weight (hitMask * reflectance * (1 - roughness)).
+    float reflectance = max(max(F.r, F.g), F.b);
+    float blend = hitMask * reflectance * (1.0 - roughness);
+    vec3 outputColor = reflectedColor * F;
 
-    if (pc.displayMode == 1) {
-        outputColor = reflectedColor * hitMask;
-    } else if (pc.displayMode == 2) {
+    if (pc.displayMode == 2) {
         outputColor = vec3(hitMask);
+    } else if (pc.displayMode == 3) {
+        outputColor = vec3(thicknessRatio * hitMask);
+    } else if (pc.displayMode == 4) {
+        // Visualize the raw GBuffer depth buffer (not the HiZ pyramid).
+        float rawDepth = texture(depthSampler, uv).r;
+        outputColor = vec3(1.0 - rawDepth);
+    } else if (pc.displayMode == 5) {
+        // Visualize a selected mip level of the HiZ pyramid.
+        int mip = clamp(pc.hizVisMip, 0, pc.hizMaxMip);
+        float rawDepth = textureLod(hizSampler, uv, float(mip)).r;
+        outputColor = vec3(1.0 - rawDepth);   // 近处白、远处黑，便于观察
     }
 
-    imageStore(outSceneColor, texel, vec4(outputColor, 1.0));
+    imageStore(outSSR, texel, vec4(outputColor, blend));
 }

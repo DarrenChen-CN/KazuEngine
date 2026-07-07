@@ -14,6 +14,8 @@
 #include "pass/FXAAPass.h"
 #include "pass/TAAPass.h"
 #include "pass/SSRPass.h"
+#include "pass/SSRBlurHPass.h"
+#include "pass/SSRCompositePass.h"
 #include "pass/HiZPass.h"
 #include "pass/BloomPass.h"
 #include "app/AppUI.h"
@@ -75,10 +77,11 @@ void DeferredShading::onInit() {
     m_renderGraph = std::make_unique<RenderGraph>(m_rhi->ctx());
 
     // Import swapchain as an external resource (handle is rebound per-frame)
+    VkExtent2D swapExtent = m_rhi->swapchainExtent();
     m_swapchainHandle = m_renderGraph->addImportedTexture(
         "Swapchain",
-        {.width = m_rhi->extent().width,
-         .height = m_rhi->extent().height,
+        {.width = swapExtent.width,
+         .height = swapExtent.height,
          .format = m_rhi->swapchainFormat(),
          .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT},
         m_rhi->swapchainImage(0),      // placeholder, rebound each frame
@@ -132,8 +135,21 @@ void DeferredShading::onInit() {
         m_gbufferPass->depthHandle(),
         m_gbufferPass->normalHandle(),
         m_gbufferPass->materialHandle(),
+        m_gbufferPass->albedoHandle(),
         m_hizPass->hizHandle());
     m_ssrPass->declare(m_rhi, m_renderGraph.get());
+
+    m_ssrBlurHPass = std::make_unique<SSRBlurHPass>();
+    m_ssrBlurHPass->setInputSSR(m_ssrPass->outputHandle());
+    m_ssrBlurHPass->setRadius(m_ssrBlurRadius);
+    m_ssrBlurHPass->declare(m_rhi, m_renderGraph.get());
+
+    m_ssrCompositePass = std::make_unique<SSRCompositePass>();
+    m_ssrCompositePass->setInputBlurredTemp(m_ssrBlurHPass->blurredTempHandle());
+    m_ssrCompositePass->setInputSceneColor(m_lightingPass->sceneColorHandle());
+    m_ssrCompositePass->setRadius(m_ssrBlurRadius);
+    m_ssrCompositePass->setDisplayMode(m_ssrDisplayMode);
+    m_ssrCompositePass->declare(m_rhi, m_renderGraph.get());
 
     // TAA history buffers (persistent, ping-ponged across frames)
     {
@@ -197,7 +213,7 @@ void DeferredShading::onInit() {
     }
 
     m_taaPass = std::make_unique<TAAPass>();
-    m_taaPass->setInputHDR(m_ssrPass->outputHandle());
+    m_taaPass->setInputHDR(m_ssrCompositePass->outputHandle());
     m_taaPass->setInputDepth(m_gbufferPass->depthHandle());
     m_taaPass->setHistoryRead(m_taaHistoryHandles[0]);
     m_taaPass->setHistoryWrite(m_taaHistoryHandles[1]);
@@ -246,6 +262,8 @@ void DeferredShading::onInit() {
     m_lightVisualizePass->create(passCtx);
     m_hizPass->create(passCtx);
     m_ssrPass->create(passCtx);
+    m_ssrBlurHPass->create(passCtx);
+    m_ssrCompositePass->create(passCtx);
     m_taaPass->create(passCtx);
     m_bloomPass->create(passCtx);
     m_tonemapPass->create(passCtx);
@@ -293,6 +311,17 @@ void DeferredShading::render(const RenderFrameContext& frame) {
         m_ssrPass->setEnabled(m_ssrEnabled);
         m_ssrPass->setDisplayMode(m_ssrDisplayMode);
         m_ssrPass->setTraceMode(m_ssrTraceMode);
+        m_ssrPass->setMaxDistance(m_ssrMaxDistance);
+        m_ssrPass->setStride(m_ssrStride);
+        m_ssrPass->setThickness(m_ssrThickness);
+        m_ssrPass->setStepCount(m_ssrStepCount);
+        m_ssrPass->setBinarySearchSteps(m_ssrBinarySearchSteps);
+        m_ssrPass->setJitterEnabled(m_ssrJitterEnabled);
+        m_ssrPass->setHizVisMip(m_ssrHizVisMip);
+
+        m_ssrBlurHPass->setRadius(m_ssrBlurRadius);
+        m_ssrCompositePass->setRadius(m_ssrBlurRadius);
+        m_ssrCompositePass->setDisplayMode(m_ssrDisplayMode);
     }
 
     // ---- CPU frame-time tracking per SSR mode ----
@@ -461,16 +490,48 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     ssrEnableItem.b.value = &m_ssrEnabled;
     desc.items.push_back(ssrEnableItem);
 
-    static const char* ssrDebugModes[] = {"Composite", "Reflection Only", "Hit Mask"};
+    static const char* ssrDebugModes[] = {"Composite", "Reflection Only", "Hit Mask", "Thickness", "Raw Depth", "HiZ Mip"};
     PanelItem ssrDebugItem{};
     ssrDebugItem.type = PanelItem::Enum;
     ssrDebugItem.label = "SSR Debug";
     ssrDebugItem.e.value = &m_ssrDisplayMode;
     ssrDebugItem.e.names = ssrDebugModes;
-    ssrDebugItem.e.count = 3;
+    ssrDebugItem.e.count = 6;
     desc.items.push_back(ssrDebugItem);
 
-    static const char* ssrTraceModes[] = {"Basic", "Binary", "Hi-Z"};
+    PanelItem ssrMaxDistanceItem{};
+    ssrMaxDistanceItem.type = PanelItem::Float;
+    ssrMaxDistanceItem.label = "SSR Max Distance";
+    ssrMaxDistanceItem.f.value = &m_ssrMaxDistance;
+    ssrMaxDistanceItem.f.min = 0.5f;
+    ssrMaxDistanceItem.f.max = 30.0f;
+    desc.items.push_back(ssrMaxDistanceItem);
+
+    PanelItem ssrStrideItem{};
+    ssrStrideItem.type = PanelItem::Float;
+    ssrStrideItem.label = "SSR Stride";
+    ssrStrideItem.f.value = &m_ssrStride;
+    ssrStrideItem.f.min = 1.0f;
+    ssrStrideItem.f.max = 64.0f;
+    desc.items.push_back(ssrStrideItem);
+
+    PanelItem ssrStepCountItem{};
+    ssrStepCountItem.type = PanelItem::Int;
+    ssrStepCountItem.label = "SSR Step Count";
+    ssrStepCountItem.i.value = &m_ssrStepCount;
+    ssrStepCountItem.i.min = 1;
+    ssrStepCountItem.i.max = 512;
+    desc.items.push_back(ssrStepCountItem);
+
+    PanelItem ssrThicknessItem{};
+    ssrThicknessItem.type = PanelItem::Float;
+    ssrThicknessItem.label = "SSR Thickness";
+    ssrThicknessItem.f.value = &m_ssrThickness;
+    ssrThicknessItem.f.min = 0.0f;
+    ssrThicknessItem.f.max = 0.1f;
+    desc.items.push_back(ssrThicknessItem);
+
+    static const char* ssrTraceModes[] = {"Basic", "DDA", "Hi-Z"};
     PanelItem ssrTraceItem{};
     ssrTraceItem.type = PanelItem::Enum;
     ssrTraceItem.label = "SSR Trace Mode";
@@ -479,19 +540,53 @@ void DeferredShading::exposePanel(PanelDesc& desc) {
     ssrTraceItem.e.count = 3;
     desc.items.push_back(ssrTraceItem);
 
+    PanelItem ssrBinaryStepsItem{};
+    ssrBinaryStepsItem.type = PanelItem::Int;
+    ssrBinaryStepsItem.label = "SSR Binary Steps";
+    ssrBinaryStepsItem.i.value = &m_ssrBinarySearchSteps;
+    ssrBinaryStepsItem.i.min = 1;
+    ssrBinaryStepsItem.i.max = 16;
+    desc.items.push_back(ssrBinaryStepsItem);
+
+    PanelItem ssrJitterItem{};
+    ssrJitterItem.type = PanelItem::Bool;
+    ssrJitterItem.label = "SSR Jitter";
+    ssrJitterItem.b.value = &m_ssrJitterEnabled;
+    desc.items.push_back(ssrJitterItem);
+
+    PanelItem ssrBlurRadiusItem{};
+    ssrBlurRadiusItem.type = PanelItem::Float;
+    ssrBlurRadiusItem.label = "SSR Blur Radius";
+    ssrBlurRadiusItem.f.value = &m_ssrBlurRadius;
+    ssrBlurRadiusItem.f.min = 0.0f;
+    ssrBlurRadiusItem.f.max = 8.0f;
+    desc.items.push_back(ssrBlurRadiusItem);
+
+    PanelItem ssrHizMipItem{};
+    ssrHizMipItem.type = PanelItem::Int;
+    ssrHizMipItem.label = "HiZ Vis Mip";
+    ssrHizMipItem.i.value = &m_ssrHizVisMip;
+    ssrHizMipItem.i.min = 0;
+    ssrHizMipItem.i.max = 16;
+    desc.items.push_back(ssrHizMipItem);
+
     if (m_ssrPass) {
         char buf[128];
         PanelItem gpuLabel{};
         gpuLabel.type = PanelItem::Label;
         std::snprintf(buf, sizeof(buf),
-            "SSR GPU: %.3f ms (avg %.3f)",
-            m_ssrPass->lastGpuTimeMs(), m_ssrPass->avgGpuTimeMs());
+            "SSR GPU: B=%.3f/%.3f  D=%.3f/%.3f  H=%.3f/%.3f ms",
+            m_ssrPass->lastGpuTimeMs(0), m_ssrPass->avgGpuTimeMs(0),
+            m_ssrPass->lastGpuTimeMs(1), m_ssrPass->avgGpuTimeMs(1),
+            m_ssrPass->lastGpuTimeMs(2), m_ssrPass->avgGpuTimeMs(2));
         gpuLabel.label = buf;
         desc.items.push_back(gpuLabel);
 
         PanelItem stepLabel{};
         stepLabel.type = PanelItem::Label;
-        std::snprintf(buf, sizeof(buf), "Avg ray steps: %.1f", m_ssrPass->avgSteps());
+        std::snprintf(buf, sizeof(buf),
+            "Avg ray steps: B=%.1f  D=%.1f  H=%.1f",
+            m_ssrPass->avgSteps(0), m_ssrPass->avgSteps(1), m_ssrPass->avgSteps(2));
         stepLabel.label = buf;
         desc.items.push_back(stepLabel);
 

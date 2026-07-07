@@ -20,6 +20,8 @@ namespace {
 
 struct GBufferPush {
     glm::mat4 mvp;
+    glm::mat4 model;
+    glm::mat4 normalMatrix;
     glm::vec4 baseColorFactor;
     glm::vec4 materialParams;
 };
@@ -129,6 +131,8 @@ void GBufferPass::execute(const PassExecuteContext& ctx) {
 
         GBufferPush push{};
         push.mvp = viewProj * inst.transform;
+        push.model = inst.transform;
+        push.normalMatrix = glm::transpose(glm::inverse(inst.transform));
         push.baseColorFactor = inst.pendingBaseColorFactor;
         int textureFlags = 0;
         if (inst.pendingNormalMap) textureFlags |= 1;

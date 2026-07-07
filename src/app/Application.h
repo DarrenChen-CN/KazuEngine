@@ -47,8 +47,14 @@ private:
     static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
     static void framebufferResizeCallback(GLFWwindow* window, int width, int height);
 
-    uint32_t m_windowWidth = 1280;
-    uint32_t m_windowHeight = 720;
+    // Layout: hard-coded left UI panel width; the right-side render area size
+    // comes from the scene config's window.width/height (or the defaults below).
+    static constexpr uint32_t UI_PANEL_WIDTH = 460;
+    static constexpr uint32_t DEFAULT_RENDER_WIDTH = 1280;
+    static constexpr uint32_t DEFAULT_RENDER_HEIGHT = 720;
+
+    uint32_t m_windowWidth = DEFAULT_RENDER_WIDTH + UI_PANEL_WIDTH;
+    uint32_t m_windowHeight = DEFAULT_RENDER_HEIGHT;
     GLFWwindow* m_window = nullptr;
 
     std::unique_ptr<RHI> m_rhi;

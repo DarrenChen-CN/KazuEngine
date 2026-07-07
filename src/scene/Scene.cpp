@@ -163,9 +163,7 @@ void Scene::loadFromFile(Context& ctx, const std::string& scenePath) {
     if (!environment.empty()) {
         m_rendererSettings.environment.enabled = environment.value("enabled", false);
         m_rendererSettings.environment.hdrPath = environment.value("hdr", std::string{});
-        if (m_rendererSettings.environment.enabled) {
-            m_rendererSettings.lighting.enableIBL = true;
-        }
+        // Keep IBL independent of environment background; respect the "ibl" feature flag.
     }
 
     // Parse light

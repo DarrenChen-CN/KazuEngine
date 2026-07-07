@@ -120,12 +120,16 @@ void PresentPass::create(const PassCreateContext& ctx) {
 void PresentPass::execute(const PassExecuteContext& ctx) {
     VkCommandBuffer cmd = ctx.cmd;
 
+    VkExtent2D swapExtent = m_rhi->swapchainExtent();
+    VkExtent2D renderExtent = m_rhi->extent();
+    int32_t renderOffsetX = static_cast<int32_t>(swapExtent.width - renderExtent.width);
+
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass = m_renderGraph->getRenderPass(m_passHandle);
     rpInfo.framebuffer = m_renderGraph->getFramebuffer(m_passHandle, ctx.imageIndex);
     rpInfo.renderArea.offset = {0, 0};
-    rpInfo.renderArea.extent = m_rhi->extent();
+    rpInfo.renderArea.extent = swapExtent;
     std::array<VkClearValue, 1> clears{};
     clears[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
     rpInfo.clearValueCount = 1;
@@ -134,13 +138,16 @@ void PresentPass::execute(const PassExecuteContext& ctx) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_effect->pipeline());
 
     VkViewport viewport{};
-    viewport.width = static_cast<float>(m_rhi->extent().width);
-    viewport.height = static_cast<float>(m_rhi->extent().height);
+    viewport.x = static_cast<float>(renderOffsetX);
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(renderExtent.width);
+    viewport.height = static_cast<float>(renderExtent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     VkRect2D scissor{};
-    scissor.extent = m_rhi->extent();
+    scissor.offset = {renderOffsetX, 0};
+    scissor.extent = renderExtent;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,

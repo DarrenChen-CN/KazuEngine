@@ -92,7 +92,8 @@ bool GPUTimer::fetchMs(uint32_t slot, float& outMs) {
         return false;
     }
 
-    float ms = static_cast<float>(static_cast<double>(end - begin) * m_period * 1000.0);
+    // timestampPeriod is in nanoseconds per tick, so divide by 1'000'000 to get ms.
+    float ms = static_cast<float>(static_cast<double>(end - begin) * m_period / 1'000'000.0);
     m_elapsedMs[slot] = ms;
     m_valid[slot] = true;
     outMs = ms;

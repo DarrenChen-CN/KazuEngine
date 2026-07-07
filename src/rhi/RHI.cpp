@@ -23,10 +23,12 @@ namespace kazu {
 RHI::RHI() = default;
 RHI::~RHI() { cleanup(); }
 
-bool RHI::init(GLFWwindow* window) {
+bool RHI::init(GLFWwindow* window, uint32_t uiPanelWidth) {
     m_window = window;
+    m_uiPanelWidth = uiPanelWidth;
     m_ctx = std::make_unique<Context>("KazuEngine", true);
     m_swapchain = std::make_unique<Swapchain>(*m_ctx, window, VK_NULL_HANDLE);
+    updateRenderExtent();
     m_shaderLibrary = std::make_unique<ShaderLibrary>(*m_ctx);
     m_descriptorSetLayoutCache = std::make_unique<DescriptorSetLayoutCache>(*m_ctx);
     m_pipelineCache = std::make_unique<PipelineCache>(*m_ctx);
@@ -123,7 +125,14 @@ void RHI::recreateSwapchain() {
     }
 
     m_swapchain->recreate(VK_NULL_HANDLE); // framebuffers managed by passes now
+    updateRenderExtent();
     m_syncObjects->recreateImageRenderFinished(m_swapchain->imageCount());
+}
+
+void RHI::updateRenderExtent() {
+    VkExtent2D swap = m_swapchain->extent();
+    m_renderExtent.width = (swap.width > m_uiPanelWidth) ? (swap.width - m_uiPanelWidth) : 1;
+    m_renderExtent.height = swap.height;
 }
 
 // Accessors
@@ -131,10 +140,13 @@ VkCommandBuffer RHI::currentCmd() const {
     return m_commandBuffers[m_currentFrame]->handle();
 }
 VkExtent2D RHI::extent() const {
-    return m_swapchain->extent();
+    return m_renderExtent;
 }
 float RHI::aspect() const {
-    return static_cast<float>(m_swapchain->extent().width) / m_swapchain->extent().height;
+    return static_cast<float>(m_renderExtent.width) / static_cast<float>(m_renderExtent.height);
+}
+VkExtent2D RHI::swapchainExtent() const {
+    return m_swapchain->extent();
 }
 VkImage RHI::swapchainImage(uint32_t imageIndex) const {
     return m_swapchain->image(imageIndex);

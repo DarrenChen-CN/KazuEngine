@@ -10,13 +10,15 @@ layout(location = 2) out vec2 fragTexCoord;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
+    mat4 model;
+    mat4 normalMatrix;
     vec4 baseColorFactor;
     vec4 materialParams;
 } pc;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
-    fragWorldPos = inPosition;
-    fragNormal = inNormal;
+    fragWorldPos = (pc.model * vec4(inPosition, 1.0)).xyz;
+    fragNormal = normalize((pc.normalMatrix * vec4(inNormal, 0.0)).xyz);
     fragTexCoord = inTexCoord;
 }

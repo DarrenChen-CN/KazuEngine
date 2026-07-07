@@ -31,17 +31,22 @@ public:
     RHI();
     ~RHI();
 
-    bool init(GLFWwindow* window);
+    bool init(GLFWwindow* window, uint32_t uiPanelWidth = 0);
     void cleanup();
 
     // Per-frame: acquire -> record -> present
     bool beginFrame(uint32_t& imageIndex);   // false = out-of-date, skip frame
     void endFrame(uint32_t imageIndex);
 
-    // Accessors for command recording
+    // Per-frame command buffer
     VkCommandBuffer currentCmd() const;
+
+    // Extent used by the 3D rendering pipeline (swapchain minus UI panel).
     VkExtent2D extent() const;
     float aspect() const;
+
+    // Full swapchain extent (including the UI panel area).
+    VkExtent2D swapchainExtent() const;
 
     // Swapchain queries
     VkImage swapchainImage(uint32_t imageIndex) const;
@@ -62,6 +67,7 @@ private:
     void createCommandPoolAndBuffers();
     void createSyncObjects();
     void recreateSwapchain();
+    void updateRenderExtent();
 
     static const int MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -76,6 +82,9 @@ private:
     std::unique_ptr<SyncObjects> m_syncObjects;
     uint32_t m_currentFrame = 0;
     bool m_framebufferResized = false;
+
+    uint32_t m_uiPanelWidth = 0;
+    VkExtent2D m_renderExtent{};
 };
 
 } // namespace kazu

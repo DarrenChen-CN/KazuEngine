@@ -86,12 +86,14 @@ void AppUI::beginFrame() {
 void AppUI::endFrame(VkCommandBuffer cmd, uint32_t imageIndex) {
     ImGui::Render();
 
+    VkExtent2D swapExtent = m_rhi->swapchainExtent();
+
     VkRenderPassBeginInfo rpInfo{};
     rpInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     rpInfo.renderPass = m_renderPass;
     rpInfo.framebuffer = m_framebuffers[imageIndex];
     rpInfo.renderArea.offset = {0, 0};
-    rpInfo.renderArea.extent = m_rhi->extent();
+    rpInfo.renderArea.extent = swapExtent;
     vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     vkCmdEndRenderPass(cmd);
@@ -106,8 +108,14 @@ bool AppUI::wantsKeyboardInput() {
 }
 
 void AppUI::drawPanel(const PanelDesc& desc) {
-    ImGui::SetNextWindowSize(ImVec2(420, 380), ImGuiCond_Always);
-    ImGui::Begin(desc.name.c_str(), nullptr, ImGuiWindowFlags_NoResize);
+    VkExtent2D swapExtent = m_rhi->swapchainExtent();
+    VkExtent2D renderExtent = m_rhi->extent();
+    float panelWidth = static_cast<float>(swapExtent.width - renderExtent.width);
+    if (panelWidth < 100.0f) panelWidth = 460.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(panelWidth, static_cast<float>(swapExtent.height)), ImGuiCond_Always);
+    ImGui::Begin(desc.name.c_str(), nullptr);
     for (const auto& item : desc.items) {
         switch (item.type) {
             case PanelItem::Enum:
@@ -210,6 +218,7 @@ void AppUI::onResize() {
 
 void AppUI::createFramebuffers() {
     uint32_t count = m_rhi->swapchainImageCount();
+    VkExtent2D swapExtent = m_rhi->swapchainExtent();
     m_framebuffers.resize(count);
     for (uint32_t i = 0; i < count; ++i) {
         VkImageView view = m_rhi->swapchainImageView(i);
@@ -218,8 +227,8 @@ void AppUI::createFramebuffers() {
         info.renderPass = m_renderPass;
         info.attachmentCount = 1;
         info.pAttachments = &view;
-        info.width = m_rhi->extent().width;
-        info.height = m_rhi->extent().height;
+        info.width = swapExtent.width;
+        info.height = swapExtent.height;
         info.layers = 1;
         VK_CHECK(vkCreateFramebuffer(m_rhi->ctx().device(), &info, nullptr, &m_framebuffers[i]));
     }

@@ -13,21 +13,25 @@
 #include <glm/glm.hpp>
 #include <array>
 #include <cstring>
+#include <algorithm>
 
 namespace kazu {
 
 namespace {
 
 struct SSRPush {
-    glm::mat4 viewProj;
-    glm::mat4 invViewProj;
-    glm::vec4 cameraPos;   // xyz = world camera position
-    glm::vec4 params;      // x = maxSteps, y = stepSize, z = thickness, w = roughnessScale
+    glm::mat4 proj;
+    glm::mat4 invProj;
+    glm::mat4 view;
+    glm::vec4 params;      // x = maxDistance, y = stridePixels, z = thickness, w = stepCount
     glm::vec2 screenSize;
     int32_t   displayMode;
-    int32_t   traceMode;   // 0 = basic, 1 = binary, 2 = Hi-Z
+    int32_t   traceMode;   // 0 = basic, 1 = DDA, 2 = Hi-Z
     int32_t   hizMaxMip;
     int32_t   enabled;     // 0 = bypass SSR, 1 = run SSR
+    int32_t   binarySearchSteps; // outer binary iterations
+    int32_t   jitterEnabled;
+    int32_t   hizVisMip;
 };
 
 } // anonymous namespace
@@ -50,22 +54,26 @@ SSRPass::~SSRPass() {
         vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);
     if (m_sampler)
         vkDestroySampler(device, m_sampler, nullptr);
+    if (m_depthSampler)
+        vkDestroySampler(device, m_depthSampler, nullptr);
 }
 
 void SSRPass::setInputs(RenderGraph::ResourceHandle sceneColor,
                         RenderGraph::ResourceHandle depth,
                         RenderGraph::ResourceHandle normal,
                         RenderGraph::ResourceHandle material,
+                        RenderGraph::ResourceHandle albedo,
                         RenderGraph::ResourceHandle hiz) {
     m_sceneColorHandle = sceneColor;
     m_depthHandle      = depth;
     m_normalHandle     = normal;
     m_materialHandle   = material;
+    m_albedoHandle     = albedo;
     m_hizHandle        = hiz;
 }
 
 void SSRPass::declare(RHI* rhi, RenderGraph* rg) {
-    m_outputHandle = rg->addTexture("SceneColorWithSSR",
+    m_outputHandle = rg->addTexture("SSRReflect",
         {.width  = rhi->extent().width,
          .height = rhi->extent().height,
          .format = VK_FORMAT_R16G16B16A16_SFLOAT,
@@ -78,6 +86,7 @@ void SSRPass::declare(RHI* rhi, RenderGraph* rg) {
         b.read(self->m_depthHandle);
         b.read(self->m_normalHandle);
         b.read(self->m_materialHandle);
+        b.read(self->m_albedoHandle);
         if (self->m_hizHandle != RenderGraph::InvalidResource)
             b.read(self->m_hizHandle);
         b.writeStorageImage(self->m_outputHandle);
@@ -91,6 +100,9 @@ void SSRPass::create(const PassCreateContext& ctx) {
     m_rhi = ctx.rhi;
     m_renderGraph = ctx.renderGraph;
 
+    VkExtent2D extent = m_rhi->extent();
+    m_hizMaxMip = static_cast<int>(computeMipLevels(extent.width, extent.height)) - 1;
+
     m_timer = std::make_unique<GPUTimer>(
         m_rhi->ctx().device(),
         m_rhi->ctx().physicalDevice(),
@@ -103,6 +115,7 @@ void SSRPass::create(const PassCreateContext& ctx) {
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         std::memset(m_stepBuffers[i]->mapped(), 0, static_cast<size_t>(statsSize));
+        m_slotTraceMode[i] = -1;
     }
 
     createPipeline();
@@ -112,6 +125,7 @@ void SSRPass::create(const PassCreateContext& ctx) {
 void SSRPass::createPipeline() {
     VkDevice device = m_rhi->ctx().device();
 
+    // Linear sampler for scene color / normal / material / albedo.
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
     samplerInfo.magFilter = VK_FILTER_LINEAR;
@@ -123,28 +137,43 @@ void SSRPass::createPipeline() {
     samplerInfo.maxLod = 32.0f;
     VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_sampler));
 
-    // Binding 0 = output storage image
-    // Binding 1 = scene color sampler
+    // Nearest sampler for depth / Hi-Z: depth values must not be interpolated
+    // when sampled at explicit mip levels, otherwise the min-pyramid is no
+    // longer conservative.
+    VkSamplerCreateInfo depthSamplerInfo{};
+    depthSamplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    depthSamplerInfo.magFilter = VK_FILTER_NEAREST;
+    depthSamplerInfo.minFilter = VK_FILTER_NEAREST;
+    depthSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    depthSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    depthSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    depthSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    depthSamplerInfo.maxLod = 32.0f;
+    VK_CHECK(vkCreateSampler(device, &depthSamplerInfo, nullptr, &m_depthSampler));
+
+    // Binding 0 = output reflection contribution storage image
+    // Binding 1 = scene color sampler (for reflected color lookup)
     // Binding 2 = depth sampler
     // Binding 3 = normal sampler
     // Binding 4 = material sampler
-    // Binding 5 = Hi-Z pyramid sampler
-    // Binding 6 = per-pixel step statistics (storage buffer)
-    std::vector<VkDescriptorSetLayoutBinding> bindings(7);
+    // Binding 5 = albedo sampler
+    // Binding 6 = Hi-Z pyramid sampler
+    // Binding 7 = per-pixel step statistics (storage buffer)
+    std::vector<VkDescriptorSetLayoutBinding> bindings(8);
     bindings[0].binding = 0;
     bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     bindings[0].descriptorCount = 1;
     bindings[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    for (uint32_t i = 1; i < 6; ++i) {
+    for (uint32_t i = 1; i < 7; ++i) {
         bindings[i].binding = i;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         bindings[i].descriptorCount = 1;
         bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     }
-    bindings[6].binding = 6;
-    bindings[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    bindings[6].descriptorCount = 1;
-    bindings[6].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    bindings[7].binding = 7;
+    bindings[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[7].descriptorCount = 1;
+    bindings[7].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
 
     m_descriptorSetLayout = m_rhi->dslCache().getOrCreate(bindings);
 
@@ -182,7 +211,7 @@ void SSRPass::createDescriptorSets() {
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     poolSizes[0].descriptorCount = kRingSize;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = 5 * kRingSize;
+    poolSizes[1].descriptorCount = 6 * kRingSize;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[2].descriptorCount = kRingSize;
 
@@ -206,11 +235,12 @@ void SSRPass::createDescriptorSets() {
     VkImageView depthView      = m_renderGraph->getImageView(m_depthHandle);
     VkImageView normalView     = m_renderGraph->getImageView(m_normalHandle);
     VkImageView materialView   = m_renderGraph->getImageView(m_materialHandle);
+    VkImageView albedoView     = m_renderGraph->getImageView(m_albedoHandle);
     VkImageView hizView        = (m_hizHandle != RenderGraph::InvalidResource)
                                    ? m_renderGraph->getImageView(m_hizHandle)
                                    : depthView; // fallback, won't be sampled in basic/binary modes
 
-    std::array<VkDescriptorImageInfo, 6> infos{};
+    std::array<VkDescriptorImageInfo, 7> infos{};
     infos[0].imageView = outputView;
     infos[0].imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     infos[0].sampler = VK_NULL_HANDLE;
@@ -219,7 +249,7 @@ void SSRPass::createDescriptorSets() {
     infos[1].imageView = sceneColorView;
     infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    infos[2].sampler = m_sampler;
+    infos[2].sampler = m_depthSampler;
     infos[2].imageView = depthView;
     infos[2].imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 
@@ -232,8 +262,12 @@ void SSRPass::createDescriptorSets() {
     infos[4].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     infos[5].sampler = m_sampler;
-    infos[5].imageView = hizView;
+    infos[5].imageView = albedoView;
     infos[5].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    infos[6].sampler = m_depthSampler;
+    infos[6].imageView = hizView;
+    infos[6].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     for (uint32_t slot = 0; slot < kRingSize; ++slot) {
         VkDescriptorBufferInfo stepBufferInfo{};
@@ -241,8 +275,8 @@ void SSRPass::createDescriptorSets() {
         stepBufferInfo.offset = 0;
         stepBufferInfo.range = VK_WHOLE_SIZE;
 
-        std::array<VkWriteDescriptorSet, 7> writes{};
-        for (uint32_t i = 0; i < 6; ++i) {
+        std::array<VkWriteDescriptorSet, 8> writes{};
+        for (uint32_t i = 0; i < 7; ++i) {
             writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
             writes[i].dstSet = m_descriptorSets[slot];
             writes[i].dstBinding = i;
@@ -250,16 +284,16 @@ void SSRPass::createDescriptorSets() {
             writes[i].pImageInfo = &infos[i];
         }
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-        for (uint32_t i = 1; i < 6; ++i) {
+        for (uint32_t i = 1; i < 7; ++i) {
             writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         }
 
-        writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[6].dstSet = m_descriptorSets[slot];
-        writes[6].dstBinding = 6;
-        writes[6].descriptorCount = 1;
-        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[6].pBufferInfo = &stepBufferInfo;
+        writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[7].dstSet = m_descriptorSets[slot];
+        writes[7].dstBinding = 7;
+        writes[7].descriptorCount = 1;
+        writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[7].pBufferInfo = &stepBufferInfo;
 
         vkUpdateDescriptorSets(device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
@@ -269,24 +303,34 @@ void SSRPass::execute(const PassExecuteContext& ctx) {
     VkCommandBuffer cmd = ctx.cmd;
 
     uint32_t slot = m_frameCounter % kRingSize;
+    int prevMode = m_slotTraceMode[slot];
 
     // Read back the step statistics for this slot (from a frame at least
-    // kRingSize frames old, so the GPU work is guaranteed complete).
+    // kRingSize frames old, so the GPU work is guaranteed complete).  Attribute
+    // them to the trace mode that was active when the slot was dispatched.
     {
         const uint32_t* mapped = static_cast<const uint32_t*>(m_stepBuffers[slot]->mapped());
         uint32_t totalSteps = mapped[0];
         uint32_t totalPixels = mapped[1];
         if (totalPixels > 0) {
-            m_avgSteps = static_cast<float>(totalSteps) / static_cast<float>(totalPixels);
+            float steps = static_cast<float>(totalSteps) / static_cast<float>(totalPixels);
+            m_avgSteps = steps;
+            if (prevMode >= 0 && prevMode < kModeCount) {
+                constexpr float alpha = 0.05f;
+                m_avgStepsByMode[prevMode] = m_avgStepsByMode[prevMode] * (1.0f - alpha) + steps * alpha;
+            }
         }
     }
 
-    // Update rolling GPU timer average for the same slot.
+    // Update rolling GPU timer average for the same slot, keyed by mode.
     {
         float ms = 0.0f;
         if (m_timer->fetchMs(slot, ms)) {
-            m_lastGpuMs = ms;
-            m_avgGpuMs = m_timer->averageMs();
+            if (prevMode >= 0 && prevMode < kModeCount) {
+                m_lastGpuMsByMode[prevMode] = ms;
+                constexpr float alpha = 0.05f;
+                m_avgGpuMsByMode[prevMode] = m_avgGpuMsByMode[prevMode] * (1.0f - alpha) + ms * alpha;
+            }
         }
     }
 
@@ -317,21 +361,29 @@ void SSRPass::execute(const PassExecuteContext& ctx) {
     glm::mat4 proj = ctx.camera->getJitteredProjectionMatrix(aspect);
 
     SSRPush push{};
-    push.viewProj    = proj * view;
-    push.invViewProj = glm::inverse(push.viewProj);
-    push.cameraPos   = glm::vec4(ctx.camera->position(), 1.0f);
-    push.params.x    = 64.0f;   // maxSteps
-    push.params.y    = 0.05f;   // stepSize (world space)
-    push.params.z    = 0.05f;   // thickness
-    push.params.w    = 1.0f;    // roughnessScale
+    push.proj        = proj;
+    push.invProj     = glm::inverse(proj);
+    push.view        = view;
+    push.params.x    = m_maxDistance;
+    push.params.y    = m_stride;
+    push.params.z    = m_thickness;
+    push.params.w    = static_cast<float>(m_stepCount);
     push.screenSize  = glm::vec2(static_cast<float>(extent.width), static_cast<float>(extent.height));
     push.displayMode = m_enabled ? m_displayMode : 0;
     push.traceMode   = m_enabled ? m_traceMode : 0;
-    push.hizMaxMip   = (m_hizHandle != RenderGraph::InvalidResource) ? 10 : 0;
+    push.hizMaxMip   = (m_hizHandle != RenderGraph::InvalidResource) ? m_hizMaxMip : 0;
     push.enabled     = m_enabled ? 1 : 0;
+    push.binarySearchSteps = m_binarySearchSteps;
+    push.jitterEnabled       = m_jitterEnabled ? 1 : 0;
+    push.hizVisMip           = m_hizVisMip;
 
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT,
                        0, sizeof(SSRPush), &push);
+
+    // Remember which mode this slot was dispatched with so the readback on a
+    // later frame is attributed to the correct trace mode.
+    int currentMode = m_enabled ? m_traceMode : 0;
+    m_slotTraceMode[slot] = currentMode;
 
     m_timer->resetSlot(cmd, slot);
     m_timer->begin(cmd, slot);
@@ -343,6 +395,42 @@ void SSRPass::execute(const PassExecuteContext& ctx) {
     m_timer->end(cmd, slot);
 
     ++m_frameCounter;
+
+    // Periodic console log so headless / automated runs can compare modes.
+    if ((m_frameCounter % 120) == 0) {
+        spdlog::info("SSR metrics | Basic steps={:.1f} gpu={:.3f}ms | DDA steps={:.1f} gpu={:.3f}ms | Hi-Z steps={:.1f} gpu={:.3f}ms",
+                     m_avgStepsByMode[0], m_avgGpuMsByMode[0],
+                     m_avgStepsByMode[1], m_avgGpuMsByMode[1],
+                     m_avgStepsByMode[2], m_avgGpuMsByMode[2]);
+    }
+}
+
+uint32_t SSRPass::computeMipLevels(uint32_t width, uint32_t height) {
+    uint32_t size = std::max(width, height);
+    uint32_t levels = 0;
+    while (size > 0) {
+        ++levels;
+        size >>= 1;
+    }
+    return levels;
+}
+
+float SSRPass::lastGpuTimeMs(int mode) const {
+    int m = (mode < 0) ? (m_enabled ? m_traceMode : 0) : mode;
+    m = std::clamp(m, 0, kModeCount - 1);
+    return m_lastGpuMsByMode[m];
+}
+
+float SSRPass::avgGpuTimeMs(int mode) const {
+    int m = (mode < 0) ? (m_enabled ? m_traceMode : 0) : mode;
+    m = std::clamp(m, 0, kModeCount - 1);
+    return m_avgGpuMsByMode[m];
+}
+
+float SSRPass::avgSteps(int mode) const {
+    int m = (mode < 0) ? (m_enabled ? m_traceMode : 0) : mode;
+    m = std::clamp(m, 0, kModeCount - 1);
+    return m_avgStepsByMode[m];
 }
 
 } // namespace kazu

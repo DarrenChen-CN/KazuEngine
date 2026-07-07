@@ -399,7 +399,7 @@ void LightingPass::execute(const PassExecuteContext& ctx) {
     push.shadowMode = m_settings.shadowMode;
     push.debugView = m_settings.debugView;
     push.lightingModel = m_settings.lightingModel;
-    push.iblEnabled = m_iblEnabled ? 1 : 0;
+    push.iblEnabled = (m_settings.enableIBL && m_iblEnabled) ? 1 : 0;
     push.envEnabled = m_envEnabled ? 1 : 0;
     push.ssaoEnabled = m_settings.enableSSAO ? 1 : 0;
     vkCmdPushConstants(cmd, m_effect->pipelineLayout(),

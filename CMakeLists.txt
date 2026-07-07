@@ -81,17 +81,22 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(fastgltf)
 
 # SPIRV-Reflect (for shader reflection)
-FetchContent_Declare(
-    spirv-reflect
-    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Reflect.git
-    GIT_TAG        vulkan-sdk-1.3.275.0
-    SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/spirv-reflect
-    BINARY_DIR     ${CMAKE_BINARY_DIR}/spirv-reflect-build
-    SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/spirv-reflect-subbuild
-)
-FetchContent_GetProperties(spirv-reflect)
-if(NOT spirv-reflect_POPULATED)
-    FetchContent_Populate(spirv-reflect)
+# Prefer the local copy in external/ so builds don't depend on GitHub access.
+if(EXISTS ${CMAKE_SOURCE_DIR}/external/spirv-reflect/spirv_reflect.c)
+    set(spirv-reflect_SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/spirv-reflect)
+else()
+    FetchContent_Declare(
+        spirv-reflect
+        GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Reflect.git
+        GIT_TAG        vulkan-sdk-1.3.275.0
+        SOURCE_DIR     ${CMAKE_SOURCE_DIR}/external/spirv-reflect
+        BINARY_DIR     ${CMAKE_BINARY_DIR}/spirv-reflect-build
+        SUBBUILD_DIR   ${CMAKE_BINARY_DIR}/spirv-reflect-subbuild
+    )
+    FetchContent_GetProperties(spirv-reflect)
+    if(NOT spirv-reflect_POPULATED)
+        FetchContent_Populate(spirv-reflect)
+    endif()
 endif()
 
 # Executable
@@ -167,6 +172,8 @@ set(SHADERS
     ${SHADER_SOURCE_DIR}/ssao_blur.comp
     ${SHADER_SOURCE_DIR}/hiz_build.comp
     ${SHADER_SOURCE_DIR}/ssr.comp
+    ${SHADER_SOURCE_DIR}/ssr_blur_h.comp
+    ${SHADER_SOURCE_DIR}/ssr_blur_v.comp
     ${SHADER_SOURCE_DIR}/fxaa.comp
     ${SHADER_SOURCE_DIR}/taa.comp
 )
